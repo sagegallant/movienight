@@ -12,6 +12,7 @@ const state = {
   screenShareStream: null,
   screenShareCalls: {}, // Store active media calls for screen sharing
   screenShareUser: null,
+  screenShareUserId: null,
   isDarkMode: false,
   selectedAvatar: null,
   connectionStatus: "disconnected", // Track connection status
@@ -456,11 +457,12 @@ function initializePeer(peerId) {
 
         call.on("stream", (remoteStream) => {
           console.log("Received remote screen share stream");
+          state.screenShareUser = call.metadata?.username || "Participant";
+          state.screenShareUserId = call.metadata?.userId || null;
+
           elements.screenShareContainer.classList.remove("hidden");
           elements.screenShareVideo.srcObject = remoteStream;
-          elements.screenShareUser.textContent =
-            call.metadata.username || "Participant";
-          elements.shareScreenBtn.disabled = true;
+          elements.screenShareUser.textContent = state.screenShareUser;
           elements.stopScreenShareBtn.classList.add("hidden");
         });
 
@@ -897,6 +899,15 @@ function handleParticipantLeft(userId) {
     // Display system message
     displaySystemMessage(`${username} left the room`);
 
+    // If the participant who left was sharing screen, stop screen share view
+    if (
+      (state.screenShareUserId && state.screenShareUserId === userId) ||
+      (state.screenShareUser && state.screenShareUser === username)
+    ) {
+      handleScreenShareStop();
+      displaySystemMessage("Screen sharing ended (presenter left the room)");
+    }
+
     if (wasHost && Object.keys(state.participants).length > 0) {
       electNewRoomCreator();
     }
@@ -928,6 +939,15 @@ function handlePeerDisconnect(peerId) {
 
     // Display system message
     displaySystemMessage(`${disconnectedUsername} left the room`);
+
+    // If the disconnected participant was sharing screen, stop screen share view
+    if (
+      (state.screenShareUserId && state.screenShareUserId === disconnectedUserId) ||
+      (state.screenShareUser && state.screenShareUser === disconnectedUsername)
+    ) {
+      handleScreenShareStop();
+      displaySystemMessage("Screen sharing ended (presenter left the room)");
+    }
 
     // Notify other peers
     broadcastToPeers({
@@ -1195,6 +1215,20 @@ function broadcastToPeers(data) {
 
 // Start screen sharing
 async function startScreenShare() {
+  // If someone else is already sharing, show an informative toast notification
+  if (state.screenShareUser && state.screenShareUser !== state.username) {
+    showToast(
+      `${state.screenShareUser} is already sharing their screen. They must stop before you can share.`,
+      "info"
+    );
+    return;
+  }
+
+  if (state.screenShareStream) {
+    showToast("You are already sharing your screen.", "info");
+    return;
+  }
+
   try {
     // Get screen share stream
     const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -1205,13 +1239,13 @@ async function startScreenShare() {
     // Store the stream
     state.screenShareStream = stream;
     state.screenShareUser = state.username;
+    state.screenShareUserId = state.userId;
 
     // Show the screen share container
     elements.screenShareContainer.classList.remove("hidden");
     elements.screenShareVideo.srcObject = stream;
     elements.screenShareUser.textContent = "You";
     elements.stopScreenShareBtn.classList.remove("hidden");
-    elements.shareScreenBtn.disabled = true;
 
     // Call all active peer connections to stream the screen
     Object.keys(state.connections).forEach((peerId) => {
@@ -1233,7 +1267,9 @@ async function startScreenShare() {
     });
   } catch (err) {
     console.error("Error starting screen share:", err);
-    showError("Could not start screen sharing: " + err.message);
+    if (err.name !== "NotAllowedError") {
+      showError("Could not start screen sharing: " + err.message);
+    }
   }
 }
 
@@ -1257,10 +1293,12 @@ function callPeerForScreenShare(peerId, stream) {
 
 // Handle screen share start notification from another user
 function handleScreenShareStart(data) {
+  state.screenShareUser = data.username;
+  state.screenShareUserId = data.userId;
+
   // Update UI metadata
   elements.screenShareContainer.classList.remove("hidden");
   elements.screenShareUser.textContent = data.username;
-  elements.shareScreenBtn.disabled = true;
   elements.stopScreenShareBtn.classList.add("hidden");
   displaySystemMessage(`${data.username} is sharing their screen`);
 }
@@ -1274,6 +1312,7 @@ function stopScreenShare() {
     // Reset state
     state.screenShareStream = null;
     state.screenShareUser = null;
+    state.screenShareUserId = null;
 
     // Close media calls
     Object.values(state.screenShareCalls).forEach((call) => {
@@ -1289,7 +1328,6 @@ function stopScreenShare() {
     elements.screenShareContainer.classList.add("hidden");
     elements.screenShareVideo.srcObject = null;
     elements.stopScreenShareBtn.classList.add("hidden");
-    elements.shareScreenBtn.disabled = false;
 
     // Notify peers
     broadcastToPeers({
@@ -1301,13 +1339,15 @@ function stopScreenShare() {
 
 // Handle screen share stop from another user
 function handleScreenShareStop() {
+  state.screenShareUser = null;
+  state.screenShareUserId = null;
+
   elements.screenShareContainer.classList.add("hidden");
   if (elements.screenShareVideo.srcObject) {
     const tracks = elements.screenShareVideo.srcObject.getTracks();
     tracks.forEach((track) => track.stop());
     elements.screenShareVideo.srcObject = null;
   }
-  elements.shareScreenBtn.disabled = false;
 }
 
 // Copy room ID to clipboard
