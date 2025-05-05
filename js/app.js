@@ -41,6 +41,7 @@ const elements = {
   screenShareVideo: document.getElementById("screen-share-video"),
   screenShareUser: document.getElementById("screen-share-user"),
   copyRoomIdBtn: document.getElementById("copy-room-id"),
+  copyRoomLinkBtn: document.getElementById("copy-room-link-btn"),
   refreshAvatarsBtn: document.getElementById("refresh-avatars"),
   customAvatarUrlInput: document.getElementById("custom-avatar-url"),
   useCustomAvatarBtn: document.getElementById("use-custom-avatar"),
@@ -58,6 +59,7 @@ function init() {
   setupThemeToggle();
   setupAvatarSelection();
   loadCachedUserData();
+  checkUrlForInvite();
   setupHeartbeat();
 }
 
@@ -73,6 +75,9 @@ function setupEventListeners() {
   elements.shareScreenBtn.addEventListener("click", startScreenShare);
   elements.stopScreenShareBtn.addEventListener("click", stopScreenShare);
   elements.copyRoomIdBtn.addEventListener("click", copyRoomIdToClipboard);
+  if (elements.copyRoomLinkBtn) {
+    elements.copyRoomLinkBtn.addEventListener("click", copyRoomLinkToClipboard);
+  }
 
   // Avatar selection buttons
   elements.refreshAvatarsBtn.addEventListener("click", refreshAvatars);
@@ -307,6 +312,16 @@ function generateUserId() {
   return "user_" + uuid.v4();
 }
 
+// Generate a clean 6-character room code (uppercase letters and numbers)
+function generateRoomId() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let result = "";
+  for (let i = 0; i < 6; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
 // Create a new room
 async function createRoom() {
   if (!(await validateUserInput())) return;
@@ -314,8 +329,8 @@ async function createRoom() {
   state.hostClaimRetries = 0;
   state.joinRetries = 0;
 
-  // Generate room ID
-  state.roomId = "room_" + uuid.v4().substring(0, 8);
+  // Generate 6-character room ID
+  state.roomId = generateRoomId();
 
   // Set as room creator
   state.isRoomCreator = true;
@@ -328,10 +343,11 @@ async function createRoom() {
 }
 
 // Join an existing room
-async function joinRoom() {
+async function joinRoom(targetRoomId = null) {
   if (!(await validateUserInput())) return;
 
-  const roomId = elements.roomIdInput.value.trim();
+  const rawRoomId = targetRoomId || elements.roomIdInput.value;
+  const roomId = rawRoomId ? rawRoomId.trim().toUpperCase() : "";
 
   if (!roomId) {
     showError("Please enter a room ID");
@@ -974,6 +990,7 @@ function displayRoom() {
   elements.homeScreen.classList.add("hidden");
   elements.chatRoom.classList.remove("hidden");
   elements.currentRoomId.textContent = state.roomId;
+  updateUrlWithRoom(state.roomId);
 }
 
 // Update the participants list in the UI
@@ -1150,6 +1167,7 @@ function leaveRoom() {
     // Return to home screen
     elements.chatRoom.classList.add("hidden");
     elements.homeScreen.classList.remove("hidden");
+    clearUrlRoom();
 
     // Clear the messages container and participants list
     elements.messagesContainer.innerHTML = "";
@@ -1305,6 +1323,66 @@ function copyRoomIdToClipboard() {
     });
 }
 
+// Copy invite link with room ID embedded for one-click joining
+function copyRoomLinkToClipboard() {
+  const inviteLink = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(state.roomId)}`;
+  navigator.clipboard
+    .writeText(inviteLink)
+    .then(() => {
+      showToast("Invite link copied to clipboard!", "success");
+    })
+    .catch((err) => {
+      console.error("Could not copy invite link:", err);
+      const textArea = document.createElement("textarea");
+      textArea.value = inviteLink;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+      showToast("Invite link copied to clipboard!", "success");
+    });
+}
+
+// Update address bar with room ID without page reload
+function updateUrlWithRoom(roomId) {
+  try {
+    const newUrl = `${window.location.pathname}?room=${encodeURIComponent(roomId)}`;
+    window.history.replaceState({ room: roomId }, "", newUrl);
+  } catch (e) {}
+}
+
+// Clear room query parameter from address bar
+function clearUrlRoom() {
+  try {
+    window.history.replaceState({}, "", window.location.pathname);
+  } catch (e) {}
+}
+
+// Check if page was opened via a direct invite link (?room=...)
+function checkUrlForInvite() {
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomParam = urlParams.get("room");
+    if (roomParam) {
+      const cleanRoom = roomParam.trim().toUpperCase();
+      elements.roomIdInput.value = cleanRoom;
+
+      // If user already has cached display name & avatar, auto-join
+      if (state.username && state.selectedAvatar) {
+        showToast(`Joining room ${cleanRoom} from invite link...`, "info");
+        setTimeout(() => {
+          joinRoom(cleanRoom);
+        }, 600);
+      } else {
+        showToast(`Enter your name to join room ${cleanRoom}!`, "info");
+        elements.usernameInput.focus();
+      }
+    }
+  } catch (e) {
+    console.warn("Could not parse room from URL:", e);
+  }
+}
+
 // Display connection status
 function displayConnectionStatus(status, details = "") {
   state.connectionStatus = status;
@@ -1414,6 +1492,7 @@ function resetRoom() {
   // Return to home screen
   elements.chatRoom.classList.add("hidden");
   elements.homeScreen.classList.remove("hidden");
+  clearUrlRoom();
 
   // Clear the messages container
   elements.messagesContainer.innerHTML = "";
