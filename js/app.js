@@ -15,6 +15,8 @@ const state = {
   isDarkMode: false,
   selectedAvatar: null,
   connectionStatus: "disconnected", // Track connection status
+  hostClaimRetries: 0,
+  joinRetries: 0,
 };
 
 // DOM Elements
@@ -214,6 +216,9 @@ function generateUserId() {
 async function createRoom() {
   if (!(await validateUserInput())) return;
 
+  state.hostClaimRetries = 0;
+  state.joinRetries = 0;
+
   // Generate room ID
   state.roomId = "room_" + uuid.v4().substring(0, 8);
 
@@ -239,6 +244,8 @@ async function joinRoom() {
   }
 
   state.roomId = roomId;
+  state.hostClaimRetries = 0;
+  state.joinRetries = 0;
 
   // Show connecting status
   displayConnectionStatus("connecting");
@@ -280,9 +287,33 @@ function initializePeer(peerId) {
       console.log("PeerJS connection established with ID:", id);
 
       if (state.isRoomCreator) {
-        // If creating a room, just display the room
+        state.hostClaimRetries = 0;
         displayConnectionStatus("connected", "Room created successfully");
         addSelfToParticipants();
+
+        // Connect to any remaining participants who haven't reconnected yet
+        Object.values(state.participants).forEach((participant) => {
+          if (
+            participant.userId !== state.userId &&
+            participant.peerId &&
+            participant.peerId !== state.peerId
+          ) {
+            if (
+              !state.connections[participant.peerId] ||
+              !state.connections[participant.peerId].open
+            ) {
+              const conn = state.peer.connect(participant.peerId, {
+                metadata: {
+                  userId: state.userId,
+                  username: state.username,
+                  avatar: state.avatar,
+                  hostMigration: true,
+                },
+              });
+              handlePeerConnection(conn);
+            }
+          }
+        });
       } else {
         // If joining, connect to the room creator
         connectToPeer(state.roomId);
@@ -327,6 +358,20 @@ function initializePeer(peerId) {
       console.error("Peer error:", err);
 
       if (err.type === "peer-unavailable") {
+        if (!state.isRoomCreator && (state.joinRetries || 0) < 4) {
+          state.joinRetries = (state.joinRetries || 0) + 1;
+          console.warn(
+            `Host is updating, retrying connection to ${state.roomId} (${state.joinRetries}/4)...`
+          );
+          displayConnectionStatus("connecting", "Host updating, retrying...");
+          setTimeout(() => {
+            if (state.peer && !state.peer.destroyed) {
+              connectToPeer(state.roomId);
+            }
+          }, 1500);
+          return;
+        }
+
         displayConnectionStatus(
           "error",
           "Room not found or no longer available"
@@ -348,14 +393,25 @@ function initializePeer(peerId) {
           }
         }, 5000);
       } else if (err.type === "unavailable-id") {
-        // If we're the room creator and the ID is taken, this is a problem
         if (state.isRoomCreator) {
+          state.hostClaimRetries = (state.hostClaimRetries || 0) + 1;
+          if (state.hostClaimRetries <= 6) {
+            console.warn(
+              `Room ID ${state.roomId} is still releasing on server. Retrying claim (${state.hostClaimRetries}/6)...`
+            );
+            displaySystemMessage("Re-claiming room host role on server...");
+            setTimeout(() => {
+              initializePeer(state.roomId);
+            }, 1500);
+            return;
+          }
+
           displayConnectionStatus("error", "Room ID already in use");
           showError(
-            "The room ID is already in use. Please try creating a new room."
+            "The room ID is currently unavailable. Please try creating a new room."
           );
 
-          // Reset to home screen
+          // Reset to home screen after exhausting retries
           setTimeout(resetRoom, 2000);
         } else {
           // For joiners, just generate a new random ID
