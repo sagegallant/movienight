@@ -1,16 +1,11 @@
 // Avatars generator using DiceBear API (MIT licensed)
-document.addEventListener("DOMContentLoaded", () => {
-  // DiceBear styles to use (all MIT licensed)
-  // Updated to use current DiceBear v7.x styles
+(function () {
   const collections = [
     "lorelei", // CC0 1.0 license
     "bottts", // Free for personal and commercial use
     "identicon", // MIT license
     "micah", // CC BY 4.0 license
   ];
-
-  // Generate random avatar options
-  generateAvatarOptions();
 
   /**
    * Generate avatar options using DiceBear API
@@ -49,6 +44,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Expose the function globally
+  // Expose the function globally immediately
   window.generateAvatarOptions = generateAvatarOptions;
-});
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => generateAvatarOptions());
+  } else {
+    generateAvatarOptions();
+  }
+})();
+

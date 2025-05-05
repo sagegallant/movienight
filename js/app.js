@@ -10,6 +10,8 @@ const state = {
   participants: {}, // Store participant info
   isRoomCreator: false,
   screenShareStream: null,
+  screenShareCalls: {}, // Store active media calls for screen sharing
+  screenShareUser: null,
   isDarkMode: false,
   selectedAvatar: null,
   connectionStatus: "disconnected", // Track connection status
@@ -47,6 +49,9 @@ let heartbeatInterval = null;
 
 // Initialize the application
 function init() {
+  if (window.generateAvatarOptions) {
+    window.generateAvatarOptions();
+  }
   setupEventListeners();
   setupThemeToggle();
   setupAvatarSelection();
@@ -144,7 +149,7 @@ function setupHeartbeat() {
 }
 
 // Validate user input
-function validateUserInput() {
+async function validateUserInput() {
   const username = elements.usernameInput.value.trim();
 
   if (!username) {
@@ -158,11 +163,10 @@ function validateUserInput() {
     return false;
   }
 
-  // If custom URL is provided but no avatar is selected, use the custom URL
+  // If custom URL is provided but no avatar is selected, validate and use custom URL
   if (!state.selectedAvatar && elements.customAvatarUrlInput.value.trim()) {
-    useCustomAvatar();
-    if (!state.selectedAvatar) {
-      // useCustomAvatar failed validation
+    const isCustomValid = await useCustomAvatar();
+    if (!isCustomValid || !state.selectedAvatar) {
       return false;
     }
   }
@@ -185,8 +189,8 @@ function generateUserId() {
 }
 
 // Create a new room
-function createRoom() {
-  if (!validateUserInput()) return;
+async function createRoom() {
+  if (!(await validateUserInput())) return;
 
   // Generate room ID
   state.roomId = "room_" + uuid.v4().substring(0, 8);
@@ -202,8 +206,8 @@ function createRoom() {
 }
 
 // Join an existing room
-function joinRoom() {
-  if (!validateUserInput()) return;
+async function joinRoom() {
+  if (!(await validateUserInput())) return;
 
   const roomId = elements.roomIdInput.value.trim();
 
@@ -267,6 +271,33 @@ function initializePeer(peerId) {
     state.peer.on("connection", (conn) => {
       console.log("Incoming connection from:", conn.peer);
       handlePeerConnection(conn);
+    });
+
+    // Handle incoming media calls (e.g., screen sharing)
+    state.peer.on("call", (call) => {
+      console.log("Incoming media call from:", call.peer, call.metadata);
+      if (call.metadata && call.metadata.type === "screen_share") {
+        call.answer(); // Answer without sending local stream back
+
+        call.on("stream", (remoteStream) => {
+          console.log("Received remote screen share stream");
+          elements.screenShareContainer.classList.remove("hidden");
+          elements.screenShareVideo.srcObject = remoteStream;
+          elements.screenShareUser.textContent =
+            call.metadata.username || "Participant";
+          elements.shareScreenBtn.disabled = true;
+          elements.stopScreenShareBtn.classList.add("hidden");
+        });
+
+        call.on("close", () => {
+          handleScreenShareStop();
+        });
+
+        call.on("error", (err) => {
+          console.error("Screen share media call error:", err);
+          handleScreenShareStop();
+        });
+      }
     });
 
     // Handle errors
@@ -435,6 +466,11 @@ function handlePeerConnection(conn) {
 
     // Mark connection as successfully opened
     conn.isConnectionOpen = true;
+
+    // If local user is currently sharing screen, call the new peer with screen stream
+    if (state.screenShareStream) {
+      callPeerForScreenShare(conn.peer, state.screenShareStream);
+    }
 
     // If this is a join request, send room information
     if (conn.metadata?.joinRequest && state.isRoomCreator) {
@@ -931,12 +967,19 @@ async function startScreenShare() {
     elements.stopScreenShareBtn.classList.remove("hidden");
     elements.shareScreenBtn.disabled = true;
 
-    // Handle stream end
+    // Call all active peer connections to stream the screen
+    Object.keys(state.connections).forEach((peerId) => {
+      if (state.connections[peerId] && state.connections[peerId].open) {
+        callPeerForScreenShare(peerId, stream);
+      }
+    });
+
+    // Handle stream end (user stops via browser native UI bar)
     stream.getVideoTracks()[0].addEventListener("ended", () => {
       stopScreenShare();
     });
 
-    // Notify all peers
+    // Notify all peers via data channel
     broadcastToPeers({
       type: "screen_share_start",
       username: state.username,
@@ -948,15 +991,31 @@ async function startScreenShare() {
   }
 }
 
-// Handle screen share start from another user
+// Call peer with screen share stream
+function callPeerForScreenShare(peerId, stream) {
+  try {
+    const mediaCall = state.peer.call(peerId, stream, {
+      metadata: {
+        type: "screen_share",
+        userId: state.userId,
+        username: state.username,
+      },
+    });
+    if (mediaCall) {
+      state.screenShareCalls[peerId] = mediaCall;
+    }
+  } catch (err) {
+    console.error(`Error calling ${peerId} for screen share:`, err);
+  }
+}
+
+// Handle screen share start notification from another user
 function handleScreenShareStart(data) {
-  // Display the screen share container
+  // Update UI metadata
   elements.screenShareContainer.classList.remove("hidden");
   elements.screenShareUser.textContent = data.username;
   elements.shareScreenBtn.disabled = true;
-
-  // TODO: Receive the screen share stream using WebRTC
-  // For now, we'll just show a message
+  elements.stopScreenShareBtn.classList.add("hidden");
   displaySystemMessage(`${data.username} is sharing their screen`);
 }
 
@@ -969,6 +1028,16 @@ function stopScreenShare() {
     // Reset state
     state.screenShareStream = null;
     state.screenShareUser = null;
+
+    // Close media calls
+    Object.values(state.screenShareCalls).forEach((call) => {
+      try {
+        call.close();
+      } catch (e) {
+        console.error("Error closing screen share call:", e);
+      }
+    });
+    state.screenShareCalls = {};
 
     // Update UI
     elements.screenShareContainer.classList.add("hidden");
@@ -984,11 +1053,14 @@ function stopScreenShare() {
   }
 }
 
-// Handle screen share stop
+// Handle screen share stop from another user
 function handleScreenShareStop() {
-  // Update UI
   elements.screenShareContainer.classList.add("hidden");
-  elements.screenShareVideo.srcObject = null;
+  if (elements.screenShareVideo.srcObject) {
+    const tracks = elements.screenShareVideo.srcObject.getTracks();
+    tracks.forEach((track) => track.stop());
+    elements.screenShareVideo.srcObject = null;
+  }
   elements.shareScreenBtn.disabled = false;
 }
 
@@ -1152,32 +1224,42 @@ function useCustomAvatar() {
 
   if (!customUrl) {
     showError("Please enter a valid avatar URL");
-    return;
+    return Promise.resolve(false);
   }
 
-  // Create a temporary image to test if the URL is valid
-  const testImg = new Image();
-  testImg.onload = function () {
-    // URL is valid, create a custom avatar element
-    elements.avatars.forEach((a) => a.classList.remove("selected"));
+  // Validate URL protocol for security
+  if (!customUrl.startsWith("http://") && !customUrl.startsWith("https://")) {
+    showError("Custom avatar URL must start with http:// or https://");
+    return Promise.resolve(false);
+  }
 
-    // Store the custom URL as the selected avatar
-    state.selectedAvatar = customUrl;
+  return new Promise((resolve) => {
+    // Create a temporary image to test if the URL is valid
+    const testImg = new Image();
+    testImg.onload = function () {
+      // URL is valid, create a custom avatar element
+      elements.avatars.forEach((a) => a.classList.remove("selected"));
 
-    // Visually indicate custom avatar is selected
-    displaySystemMessage("Custom avatar selected");
-    elements.customAvatarUrlInput.style.borderColor = "var(--primary-color)";
-    setTimeout(() => {
-      elements.customAvatarUrlInput.style.borderColor = "";
-    }, 2000);
-  };
+      // Store the custom URL as the selected avatar
+      state.selectedAvatar = customUrl;
 
-  testImg.onerror = function () {
-    showError("Invalid image URL. Please provide a valid image URL.");
-  };
+      // Visually indicate custom avatar is selected
+      displaySystemMessage("Custom avatar selected");
+      elements.customAvatarUrlInput.style.borderColor = "var(--primary-color)";
+      setTimeout(() => {
+        elements.customAvatarUrlInput.style.borderColor = "";
+      }, 2000);
+      resolve(true);
+    };
 
-  // Start loading the image to test
-  testImg.src = customUrl;
+    testImg.onerror = function () {
+      showError("Invalid image URL. Please provide a valid image URL.");
+      resolve(false);
+    };
+
+    // Start loading the image to test
+    testImg.src = customUrl;
+  });
 }
 
 // Initialize the app when the DOM is loaded

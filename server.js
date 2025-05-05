@@ -35,36 +35,78 @@ const MIME_TYPES = {
 const server = http.createServer((req, res) => {
   console.log(`${req.method} ${req.url}`);
 
-  // If the request is for the root, serve index.html
-  let filePath = req.url === "/" ? "./index.html" : "." + req.url;
+  // Check for path traversal sequences in raw request URL
+  let rawDecoded = "";
+  try {
+    rawDecoded = decodeURIComponent(req.url);
+  } catch (e) {
+    res.writeHead(400, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" });
+    return res.end("Bad Request");
+  }
+
+  if (rawDecoded.includes("..") || rawDecoded.includes(".\\") || rawDecoded.includes("./")) {
+    res.writeHead(403, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" });
+    return res.end("403 Forbidden");
+  }
+
+  // Parse URL safely to extract pathname without query params or hash fragments
+  let reqUrl;
+  try {
+    reqUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  } catch (e) {
+    res.writeHead(400, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" });
+    return res.end("Bad Request");
+  }
+
+  let pathname = decodeURIComponent(reqUrl.pathname);
+  if (pathname === "/") {
+    pathname = "/index.html";
+  }
+
+  // Resolve absolute file path to prevent directory traversal
+  const rootDir = path.resolve(__dirname);
+  const safePath = path.resolve(rootDir, "." + pathname);
+
+  // Security check: ensure target path is strictly within project root
+  if (!safePath.startsWith(rootDir)) {
+    res.writeHead(403, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" });
+    return res.end("403 Forbidden");
+  }
 
   // Get the file extension
-  const extname = path.extname(filePath);
+  const extname = path.extname(safePath);
   let contentType = MIME_TYPES[extname] || "application/octet-stream";
 
+  // Common security headers
+  const headers = {
+    "Content-Type": contentType,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+  };
+
   // Read the file
-  fs.readFile(filePath, (error, content) => {
+  fs.readFile(safePath, (error, content) => {
     if (error) {
-      if (error.code === "ENOENT") {
+      if (error.code === "ENOENT" || error.code === "EISDIR") {
         // File not found, serve 404 page
-        fs.readFile("./404.html", (err, content) => {
+        fs.readFile(path.join(__dirname, "404.html"), (err, content404) => {
           if (err) {
-            // If 404 page is not found, just send a plain text response
-            res.writeHead(404, { "Content-Type": "text/plain" });
+            // If 404 page is not found, send plain text
+            res.writeHead(404, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" });
             res.end("404 Not Found");
           } else {
-            res.writeHead(404, { "Content-Type": "text/html" });
-            res.end(content, "utf-8");
+            res.writeHead(404, { "Content-Type": "text/html", "X-Content-Type-Options": "nosniff" });
+            res.end(content404, "utf-8");
           }
         });
       } else {
         // Server error
-        res.writeHead(500);
+        res.writeHead(500, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" });
         res.end(`Server Error: ${error.code}`);
       }
     } else {
       // Successful response
-      res.writeHead(200, { "Content-Type": contentType });
+      res.writeHead(200, headers);
       res.end(content, "utf-8");
     }
   });
