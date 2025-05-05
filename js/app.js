@@ -57,6 +57,7 @@ function init() {
   setupEventListeners();
   setupThemeToggle();
   setupAvatarSelection();
+  loadCachedUserData();
   setupHeartbeat();
 }
 
@@ -76,6 +77,16 @@ function setupEventListeners() {
   // Avatar selection buttons
   elements.refreshAvatarsBtn.addEventListener("click", refreshAvatars);
   elements.useCustomAvatarBtn.addEventListener("click", useCustomAvatar);
+
+  // Cache username on typing
+  elements.usernameInput.addEventListener("input", () => {
+    try {
+      localStorage.setItem(
+        "echorooms_username",
+        elements.usernameInput.value.trim()
+      );
+    } catch (e) {}
+  });
 }
 
 // Setup Theme Toggle
@@ -93,6 +104,13 @@ function setupThemeToggle() {
     } else {
       elements.themeToggle.innerHTML = '<i class="fas fa-moon"></i>';
     }
+
+    try {
+      localStorage.setItem(
+        "echorooms_theme",
+        state.isDarkMode ? "dark" : "light"
+      );
+    } catch (e) {}
   });
 }
 
@@ -109,9 +127,84 @@ function setupAvatarSelection() {
       avatar.classList.add("selected");
 
       // Store the avatar URL
-      state.selectedAvatar = avatar.getAttribute("data-avatar");
+      state.selectedAvatar = avatar.getAttribute("data-avatar") || avatar.src;
+      try {
+        localStorage.setItem("echorooms_avatar", state.selectedAvatar);
+      } catch (e) {}
     });
   });
+}
+
+// Load cached username, avatar, and theme from localStorage
+function loadCachedUserData() {
+  try {
+    // 1. Cached Username
+    const cachedUsername = localStorage.getItem("echorooms_username");
+    if (cachedUsername) {
+      elements.usernameInput.value = cachedUsername;
+      state.username = cachedUsername;
+    }
+
+    // 2. Cached Theme
+    const cachedTheme = localStorage.getItem("echorooms_theme");
+    if (cachedTheme === "dark") {
+      document.body.classList.remove("light-mode");
+      document.body.classList.add("dark-mode");
+      state.isDarkMode = true;
+      elements.themeToggle.innerHTML = '<i class="fas fa-sun"></i>';
+    } else if (cachedTheme === "light") {
+      document.body.classList.remove("dark-mode");
+      document.body.classList.add("light-mode");
+      state.isDarkMode = false;
+      elements.themeToggle.innerHTML = '<i class="fas fa-moon"></i>';
+    }
+
+    // 3. Cached Avatar
+    const cachedAvatar = localStorage.getItem("echorooms_avatar");
+    if (cachedAvatar) {
+      state.selectedAvatar = cachedAvatar;
+
+      let matchedPredefined = false;
+      elements.avatars.forEach((avatar) => {
+        const avatarUrl = avatar.getAttribute("data-avatar") || avatar.src;
+        if (avatarUrl === cachedAvatar) {
+          avatar.classList.add("selected");
+          matchedPredefined = true;
+        } else {
+          avatar.classList.remove("selected");
+        }
+      });
+
+      // If cached avatar was a custom avatar or not among current generated options
+      if (!matchedPredefined) {
+        if (cachedAvatar.startsWith("http://") || cachedAvatar.startsWith("https://")) {
+          elements.customAvatarUrlInput.value = cachedAvatar;
+          const firstAvatar = elements.avatars[0];
+          if (firstAvatar) {
+            firstAvatar.src = cachedAvatar;
+            firstAvatar.setAttribute("data-avatar", cachedAvatar);
+            firstAvatar.classList.add("selected");
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Could not load cached user data from localStorage:", e);
+  }
+}
+
+// Save user data to localStorage cache
+function saveUserDataToCache() {
+  try {
+    if (state.username) {
+      localStorage.setItem("echorooms_username", state.username);
+    }
+    if (state.selectedAvatar) {
+      localStorage.setItem("echorooms_avatar", state.selectedAvatar);
+    }
+  } catch (e) {
+    console.warn("Could not save user data to localStorage:", e);
+  }
 }
 
 // Setup heartbeat mechanism to monitor connection health
@@ -176,6 +269,8 @@ async function validateUserInput() {
   state.username = username;
   state.avatar = state.selectedAvatar;
   state.userId = generateUserId();
+
+  saveUserDataToCache();
 
   return true;
 }
@@ -1366,6 +1461,9 @@ function useCustomAvatar() {
 
       // Store the custom URL as the selected avatar
       state.selectedAvatar = customUrl;
+      try {
+        localStorage.setItem("echorooms_avatar", customUrl);
+      } catch (e) {}
 
       // Visually indicate custom avatar is selected
       displaySystemMessage("Custom avatar selected");
