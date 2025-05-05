@@ -178,9 +178,31 @@ async function validateUserInput() {
   return true;
 }
 
+// Show in-app toast notification
+function showToast(message, type = "info", duration = 3000) {
+  const container = document.getElementById("toast-container") || document.body;
+
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+
+  let iconClass = "fa-info-circle";
+  if (type === "success") iconClass = "fa-check-circle";
+  if (type === "error") iconClass = "fa-exclamation-circle";
+
+  toast.innerHTML = `<i class="fas ${iconClass}"></i> <span>${message}</span>`;
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.classList.add("toast-fade-out");
+    setTimeout(() => {
+      toast.remove();
+    }, 300);
+  }, duration);
+}
+
 // Show error message
 function showError(message) {
-  alert(message);
+  showToast(message, "error");
 }
 
 // Generate a unique user ID
@@ -556,6 +578,7 @@ function broadcastNewParticipant(participantData) {
       username: participantData.username,
       avatar: participantData.avatar,
       peerId: participantData.peerId || state.peerId,
+      joinTime: participantData.joinTime || Date.now(),
     },
   };
 
@@ -570,6 +593,7 @@ function addSelfToParticipants() {
     avatar: state.avatar,
     peerId: state.peerId,
     isCreator: state.isRoomCreator,
+    joinTime: Date.now(),
   };
 
   updateParticipantsList();
@@ -588,6 +612,9 @@ function handleIncomingData(conn, data) {
       break;
     case "participant_left":
       handleParticipantLeft(data.userId);
+      break;
+    case "host_update":
+      handleHostUpdate(data);
       break;
     case "chat_message":
       displayMessage(data.message);
@@ -681,6 +708,7 @@ function handleNewParticipant(participant) {
 function handleParticipantLeft(userId) {
   if (state.participants[userId]) {
     const username = state.participants[userId].username;
+    const wasHost = !!state.participants[userId].isCreator;
 
     // Remove from participants list
     delete state.participants[userId];
@@ -690,6 +718,10 @@ function handleParticipantLeft(userId) {
 
     // Display system message
     displaySystemMessage(`${username} left the room`);
+
+    if (wasHost && Object.keys(state.participants).length > 0) {
+      electNewRoomCreator();
+    }
   }
 }
 
@@ -698,11 +730,13 @@ function handlePeerDisconnect(peerId) {
   // Find and remove the participant with this peer ID
   let disconnectedUserId = null;
   let disconnectedUsername = null;
+  let wasHost = false;
 
   for (const userId in state.participants) {
     if (state.participants[userId].peerId === peerId) {
       disconnectedUserId = userId;
       disconnectedUsername = state.participants[userId].username;
+      wasHost = !!state.participants[userId].isCreator || peerId === state.roomId;
       break;
     }
   }
@@ -729,25 +763,59 @@ function handlePeerDisconnect(peerId) {
     delete state.connections[peerId];
   }
 
-  // If room creator left and we have participants, elect a new creator
-  if (state.isRoomCreator && Object.keys(state.participants).length > 0) {
+  // If room host left and remaining participants exist, elect the next host
+  if (wasHost && Object.keys(state.participants).length > 0) {
     electNewRoomCreator();
   }
 }
 
-// Elect a new room creator if the current one leaves
+// Elect a new room creator if the current host leaves
 function electNewRoomCreator() {
-  // Simple strategy: take the first remaining participant
-  const remainingParticipants = Object.values(state.participants);
-  if (remainingParticipants.length > 0) {
-    const newCreator = remainingParticipants[0];
-    newCreator.isCreator = true;
+  const remainingParticipants = Object.values(state.participants).sort(
+    (a, b) => (a.joinTime || 0) - (b.joinTime || 0)
+  );
 
-    // If it's us, update our state
-    if (newCreator.userId === state.userId) {
+  if (remainingParticipants.length > 0) {
+    // Clear isCreator flag on all, then assign to earliest joined remaining participant
+    Object.values(state.participants).forEach((p) => (p.isCreator = false));
+
+    const newHost = remainingParticipants[0];
+    newHost.isCreator = true;
+
+    if (newHost.userId === state.userId) {
       state.isRoomCreator = true;
+
+      // Re-initialize PeerJS with state.roomId so PeerJS cloud registers state.roomId under this user
+      initializePeer(state.roomId);
+
+      showToast("The room host left. You are now the room host!", "info");
+      displaySystemMessage("You are now the room host.");
+
+      // Broadcast updated room host info to remaining peers
+      broadcastToPeers({
+        type: "host_update",
+        hostUserId: state.userId,
+        participants: state.participants,
+      });
+    } else {
+      showToast(`${newHost.username} is now the room host.`, "info");
+      displaySystemMessage(`${newHost.username} is now the room host.`);
     }
+
+    updateParticipantsList();
   }
+}
+
+// Handle host update received from new room host
+function handleHostUpdate(data) {
+  if (data.participants) {
+    state.participants = data.participants;
+  }
+  const host = state.participants[data.hostUserId];
+  if (host) {
+    displaySystemMessage(`${host.username} is now the room host.`);
+  }
+  updateParticipantsList();
 }
 
 // Display the chat room
@@ -1069,7 +1137,7 @@ function copyRoomIdToClipboard() {
   navigator.clipboard
     .writeText(state.roomId)
     .then(() => {
-      alert("Room ID copied to clipboard!");
+      showToast("Room ID copied to clipboard!", "success");
     })
     .catch((err) => {
       console.error("Could not copy room ID:", err);
@@ -1082,7 +1150,7 @@ function copyRoomIdToClipboard() {
       document.execCommand("copy");
       document.body.removeChild(textArea);
 
-      alert("Room ID copied to clipboard!");
+      showToast("Room ID copied to clipboard!", "success");
     });
 }
 
