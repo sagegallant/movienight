@@ -65,10 +65,10 @@ function init() {
 
 // Setup Event Listeners
 function setupEventListeners() {
-  elements.createRoomBtn.addEventListener("click", createRoom);
-  elements.joinRoomBtn.addEventListener("click", joinRoom);
-  elements.leaveRoomBtn.addEventListener("click", leaveRoom);
-  elements.sendMessageBtn.addEventListener("click", sendMessage);
+  elements.createRoomBtn.addEventListener("click", () => createRoom());
+  elements.joinRoomBtn.addEventListener("click", () => joinRoom());
+  elements.leaveRoomBtn.addEventListener("click", () => leaveRoom());
+  elements.sendMessageBtn.addEventListener("click", () => sendMessage());
   elements.messageInput.addEventListener("keypress", (e) => {
     if (e.key === "Enter") sendMessage();
   });
@@ -326,6 +326,10 @@ function generateRoomId() {
 async function createRoom() {
   if (!(await validateUserInput())) return;
 
+  // Clear previous chat messages & participants for clean room session
+  elements.messagesContainer.innerHTML = "";
+  elements.participantsList.innerHTML = "";
+
   state.hostClaimRetries = 0;
   state.joinRetries = 0;
 
@@ -346,13 +350,20 @@ async function createRoom() {
 async function joinRoom(targetRoomId = null) {
   if (!(await validateUserInput())) return;
 
-  const rawRoomId = targetRoomId || elements.roomIdInput.value;
+  const rawRoomId =
+    typeof targetRoomId === "string" && targetRoomId.trim()
+      ? targetRoomId
+      : elements.roomIdInput.value;
   const roomId = rawRoomId ? rawRoomId.trim().toUpperCase() : "";
 
   if (!roomId) {
     showError("Please enter a room ID");
     return;
   }
+
+  // Clear previous chat messages & participants for clean room session
+  elements.messagesContainer.innerHTML = "";
+  elements.participantsList.innerHTML = "";
 
   state.roomId = roomId;
   state.hostClaimRetries = 0;
@@ -1120,7 +1131,17 @@ function scrollToBottom() {
 
 // Leave the room
 function leaveRoom() {
-  displayConnectionStatus("disconnected", "Leaving room...");
+  // Stop screen sharing if active
+  if (state.screenShareStream) {
+    stopScreenShare();
+  }
+
+  // Immediately clear UI messages & participants so old room chat never persists
+  elements.messagesContainer.innerHTML = "";
+  elements.participantsList.innerHTML = "";
+  elements.chatRoom.classList.add("hidden");
+  elements.homeScreen.classList.remove("hidden");
+  clearUrlRoom();
 
   // Notify peers that we're leaving
   broadcastToPeers({
@@ -1141,11 +1162,6 @@ function leaveRoom() {
       }
     });
 
-    // Stop screen sharing if active
-    if (state.screenShareStream) {
-      stopScreenShare();
-    }
-
     // Close PeerJS connection
     if (state.peer) {
       try {
@@ -1163,16 +1179,9 @@ function leaveRoom() {
     state.participants = {};
     state.isRoomCreator = false;
     state.connectionStatus = "disconnected";
-
-    // Return to home screen
-    elements.chatRoom.classList.add("hidden");
-    elements.homeScreen.classList.remove("hidden");
-    clearUrlRoom();
-
-    // Clear the messages container and participants list
-    elements.messagesContainer.innerHTML = "";
-    elements.participantsList.innerHTML = "";
-  }, 500); // Give 500ms for messages to send
+    state.hostClaimRetries = 0;
+    state.joinRetries = 0;
+  }, 200);
 }
 
 // Broadcast a message to all connected peers
