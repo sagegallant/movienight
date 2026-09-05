@@ -216,52 +216,92 @@ function sendYouTubeCommand(func, args = []) {
 // Listen to postMessage from YouTube iframe
 if (typeof window !== "undefined") {
   window.addEventListener("message", (event) => {
-    if (!event.data || typeof event.data !== "string") return;
-    try {
-      const msg = JSON.parse(event.data);
-      if (msg.event === "onStateChange") {
-        const stateId = msg.info;
-        if (state.isGroupVideoPresenter && !state.ignoreYtStateEvents) {
-          let curTime = 0;
-          let dur = state.groupVideoDuration || 0;
-          if (state.ytPlayer && typeof state.ytPlayer.getCurrentTime === "function") {
-            try { curTime = state.ytPlayer.getCurrentTime() || 0; } catch (e) {}
-          }
-          if (state.ytPlayer && typeof state.ytPlayer.getDuration === "function") {
-            try { dur = state.ytPlayer.getDuration() || dur; } catch (e) {}
-          }
-          if (stateId === 1) { // PLAYING
-            updateTransportPlayButton(true);
-            broadcastToPeers({
-              type: "group_video_sync",
-              action: "play",
-              time: curTime,
-              duration: dur,
-              paused: false,
-              timestamp: Date.now(),
-            });
-            startPresenterHeartbeat();
-          } else if (stateId === 2) { // PAUSED
-            updateTransportPlayButton(false);
-            broadcastToPeers({
-              type: "group_video_sync",
-              action: "pause",
-              time: curTime,
-              duration: dur,
-              paused: true,
-              timestamp: Date.now(),
-            });
-            stopPresenterHeartbeat();
-          } else if (stateId === 0) { // ENDED
-            stopGroupVideo();
-          }
+    if (!event.data) return;
+    let msg = null;
+    if (typeof event.data === "string") {
+      try { msg = JSON.parse(event.data); } catch (e) {}
+    } else if (typeof event.data === "object") {
+      msg = event.data;
+    }
+    if (!msg || typeof msg !== "object") return;
+
+    // Detect state changes from either "onStateChange" or "infoDelivery"
+    let stateId = null;
+    if (msg.event === "onStateChange") {
+      stateId = (typeof msg.info === "object" && msg.info !== null) ? msg.info.playerState : msg.info;
+    } else if (msg.event === "infoDelivery" && msg.info && typeof msg.info.playerState === "number") {
+      stateId = msg.info.playerState;
+    }
+
+    if (msg.event === "infoDelivery" && msg.info && typeof msg.info.duration === "number" && msg.info.duration > 0) {
+      state.groupVideoDuration = msg.info.duration;
+    }
+
+    if (typeof stateId === "number" && !state.ignoreYtStateEvents) {
+      if (state._lastHandledYtState === stateId) return;
+      state._lastHandledYtState = stateId;
+
+      let curTime = 0;
+      let dur = state.groupVideoDuration || 0;
+      if (state.ytPlayer && typeof state.ytPlayer.getCurrentTime === "function") {
+        try { curTime = state.ytPlayer.getCurrentTime() || 0; } catch (e) {}
+      }
+      if (state.ytPlayer && typeof state.ytPlayer.getDuration === "function") {
+        try { dur = state.ytPlayer.getDuration() || dur; } catch (e) {}
+      }
+
+      const amHost = state.isRoomCreator ||
+        (state.participants[state.userId] && state.participants[state.userId].isCreator) ||
+        (state.hostUserId && state.hostUserId === state.userId);
+
+      if (stateId === 1) { // PLAYING
+        updateTransportPlayButton(true);
+        state.groupVideoIsPlaying = true;
+        if (state.isGroupVideoPresenter) {
+          broadcastToPeers({
+            type: "group_video_sync",
+            action: "play",
+            time: curTime,
+            duration: dur,
+            paused: false,
+            timestamp: Date.now(),
+          });
+          startPresenterHeartbeat();
+        } else if (amHost && state.screenShareUserId) {
+          sendToPeer(state.screenShareUserId, {
+            type: "group_video_control",
+            action: "play",
+            time: curTime,
+            timestamp: Date.now(),
+          });
         }
-      } else if (msg.event === "infoDelivery" && msg.info) {
-        if (typeof msg.info.duration === "number" && msg.info.duration > 0) {
-          state.groupVideoDuration = msg.info.duration;
+      } else if (stateId === 2) { // PAUSED
+        updateTransportPlayButton(false);
+        state.groupVideoIsPlaying = false;
+        if (state.isGroupVideoPresenter) {
+          broadcastToPeers({
+            type: "group_video_sync",
+            action: "pause",
+            time: curTime,
+            duration: dur,
+            paused: true,
+            timestamp: Date.now(),
+          });
+          stopPresenterHeartbeat();
+        } else if (amHost && state.screenShareUserId) {
+          sendToPeer(state.screenShareUserId, {
+            type: "group_video_control",
+            action: "pause",
+            time: curTime,
+            timestamp: Date.now(),
+          });
+        }
+      } else if (stateId === 0) { // ENDED
+        if (state.isGroupVideoPresenter) {
+          stopGroupVideo();
         }
       }
-    } catch (e) {}
+    }
   });
 }
 
@@ -509,10 +549,12 @@ function setupCodeBoxes() {
 // Stage Empty Action Buttons
 // ============================================================
 function setupStageActions() {
+  const seVideo = document.getElementById("seVideo");
   const seFile = document.getElementById("seFile");
   const seUrl = document.getElementById("seUrl");
   const seScreen = document.getElementById("seScreen");
 
+  if (seVideo) seVideo.addEventListener("click", openVideoSourceModal);
   if (seFile) seFile.addEventListener("click", openVideoSourceModal);
   if (seUrl) {
     seUrl.addEventListener("click", () => {
@@ -3100,35 +3142,65 @@ function loadYouTubePlayer(videoId, options = {}) {
             container.addEventListener("click", unmuteOnUserAction);
           },
           onStateChange: (event) => {
-            if (!state.isGroupVideoPresenter || state.ignoreYtStateEvents) return;
+            if (state.ignoreYtStateEvents) return;
+            const stateId = event.data;
+            if (state._lastHandledYtState === stateId) return;
+            state._lastHandledYtState = stateId;
+
             const player = event.target;
             const curTime = player.getCurrentTime ? (player.getCurrentTime() || 0) : 0;
             const dur = player.getDuration ? (player.getDuration() || 0) : (state.groupVideoDuration || 0);
 
-            if (event.data === window.YT.PlayerState.PLAYING) {
+            const amHost = state.isRoomCreator ||
+              (state.participants[state.userId] && state.participants[state.userId].isCreator) ||
+              (state.hostUserId && state.hostUserId === state.userId);
+
+            if (stateId === window.YT.PlayerState.PLAYING) {
               updateTransportPlayButton(true);
-              broadcastToPeers({
-                type: "group_video_sync",
-                action: "play",
-                time: curTime,
-                duration: dur,
-                paused: false,
-                timestamp: Date.now(),
-              });
-              startPresenterHeartbeat();
-            } else if (event.data === window.YT.PlayerState.PAUSED) {
+              state.groupVideoIsPlaying = true;
+              if (state.isGroupVideoPresenter) {
+                broadcastToPeers({
+                  type: "group_video_sync",
+                  action: "play",
+                  time: curTime,
+                  duration: dur,
+                  paused: false,
+                  timestamp: Date.now(),
+                });
+                startPresenterHeartbeat();
+              } else if (amHost && state.screenShareUserId) {
+                sendToPeer(state.screenShareUserId, {
+                  type: "group_video_control",
+                  action: "play",
+                  time: curTime,
+                  timestamp: Date.now(),
+                });
+              }
+            } else if (stateId === window.YT.PlayerState.PAUSED) {
               updateTransportPlayButton(false);
-              broadcastToPeers({
-                type: "group_video_sync",
-                action: "pause",
-                time: curTime,
-                duration: dur,
-                paused: true,
-                timestamp: Date.now(),
-              });
-              stopPresenterHeartbeat();
-            } else if (event.data === window.YT.PlayerState.ENDED) {
-              stopGroupVideo();
+              state.groupVideoIsPlaying = false;
+              if (state.isGroupVideoPresenter) {
+                broadcastToPeers({
+                  type: "group_video_sync",
+                  action: "pause",
+                  time: curTime,
+                  duration: dur,
+                  paused: true,
+                  timestamp: Date.now(),
+                });
+                stopPresenterHeartbeat();
+              } else if (amHost && state.screenShareUserId) {
+                sendToPeer(state.screenShareUserId, {
+                  type: "group_video_control",
+                  action: "pause",
+                  time: curTime,
+                  timestamp: Date.now(),
+                });
+              }
+            } else if (stateId === window.YT.PlayerState.ENDED) {
+              if (state.isGroupVideoPresenter) {
+                stopGroupVideo();
+              }
             }
           },
           onError: (event) => {
@@ -4009,8 +4081,11 @@ function handleGroupVideoSync(data) {
     state.ignoreYtStateEvents = true;
     try {
       if (data.action === "pause") {
+        if (typeof data.time === "number" && Number.isFinite(data.time)) {
+          sendYouTubeCommand("seekTo", [data.time, true]);
+        }
         sendYouTubeCommand("pauseVideo");
-        if (typeof data.time === "number" && Number.isFinite(data.time)) sendYouTubeCommand("seekTo", [data.time, true]);
+        setTimeout(() => sendYouTubeCommand("pauseVideo"), 100);
         updateTransportPlayButton(false);
         state.groupVideoIsPlaying = false;
       } else if (data.action === "play") {
@@ -4025,10 +4100,10 @@ function handleGroupVideoSync(data) {
         if (state.ytPlayer && typeof state.ytPlayer.getCurrentTime === "function") {
           try { cur = state.ytPlayer.getCurrentTime() || 0; } catch (e) {}
         }
-        if (targetTime !== null && Math.abs(cur - targetTime) > 0.8) {
-          sendYouTubeCommand("seekTo", [targetTime, true]);
-        }
         if (data.paused === false) {
+          if (targetTime !== null && Math.abs(cur - targetTime) > 0.8) {
+            sendYouTubeCommand("seekTo", [targetTime, true]);
+          }
           sendYouTubeCommand("playVideo");
           updateTransportPlayButton(true);
           state.groupVideoIsPlaying = true;
