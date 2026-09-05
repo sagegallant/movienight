@@ -2,217 +2,282 @@
 
 <div align="center">
 
-[![GitHub Release](https://img.shields.io/github/v/release/SageGallant/movienight?style=for-the-badge&logo=github&color=blue)](https://github.com/SageGallant/movienight/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/sagegallant/movienight?style=for-the-badge&logo=github&color=blue)](https://github.com/sagegallant/movienight/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 [![WebRTC](https://img.shields.io/badge/WebRTC-P2P%20Mesh-339933?style=for-the-badge&logo=webrtc&logoColor=white)](https://webrtc.org/)
-[![PeerJS](https://img.shields.io/badge/PeerJS-Signaling-red?style=for-the-badge)](https://peerjs.com/)
-[![Video Quality](https://img.shields.io/badge/Quality-Full%20HD%201080p-blue?style=for-the-badge)](https://github.com/SageGallant/movienight)
-[![Privacy](https://img.shields.io/badge/Privacy-Zero%20Backend-success?style=for-the-badge)](https://github.com/SageGallant/movienight)
-[![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen.svg?style=for-the-badge)](https://github.com/SageGallant/movienight/pulls)
+[![Signaling: PeerJS](https://img.shields.io/badge/Signaling-PeerJS-red?style=for-the-badge)](https://peerjs.com/)
+[![Media Server: None](https://img.shields.io/badge/Media%20Server-None%20(P2P)-success?style=for-the-badge)](https://github.com/sagegallant/movienight)
+[![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen.svg?style=for-the-badge)](https://github.com/sagegallant/movienight/pulls)
 
 <p align="center">
-  <strong>Private, serverless peer-to-peer virtual screening room and watch party platform in your browser.</strong><br>
-  Stream local movie files, direct video URLs, screen shares, and YouTube embeds in real-time lock-step sync.<br>
-  <em>Zero accounts. Zero tracking. Media travels straight from your computer to your friends.</em>
+  <strong>Private, peer-to-peer virtual screening room and watch party platform in your browser.</strong><br>
+  Stream local video files, direct URLs, screen shares, and synchronized YouTube embeds in near-synchronous lock-step.<br>
+  <em>No application database. No central media relay server. Media streams directly between peers over encrypted WebRTC.</em>
 </p>
 
 <p align="center">
   <img src="assets/preview.jpg" alt="MovieNight — P2P Watch Party & Virtual Screening Room" width="100%" />
 </p>
 
-[**Explore Features**](#-key-features) • [**Architecture**](#-architecture--how-it-works) • [**Quickstart**](#-quickstart--local-development) • [**Deployment**](#-deployment-options) • [**Contributing**](#-contributing)
+[**Architecture**](#-architecture--how-it-works) • [**Capabilities**](#-capabilities--specifications) • [**Sync Engine**](#-synchronization-architecture) • [**Connectivity & NAT**](#-connectivity-model--nat-traversal) • [**Security & Threat Model**](#-security-privacy--threat-model) • [**Limitations**](#-known-limitations) • [**Quickstart**](#-quickstart--local-development)
 
 </div>
 
 ---
 
-## 🌟 Why MovieNight?
-
-Most watch party tools (Discord, Teleparty, Zoom, Kast) force everyone through central servers, compress videos to low bitrates, require logins and browser extensions, charge subscriptions for 1080p, or forbid streaming personal media files.
-
-**MovieNight** flips the model on its head:
-
-- 🛡️ **100% Peer-to-Peer Privacy**: Your video stream never touches a central streaming server. Decoded frames travel directly through encrypted WebRTC data and media channels.
-- ⚡ **No Accounts or Logins**: Share a 6-character room code (`ABC-123`) or click an invite link.
-- 🎥 **Universal Media Support**: Stream local files from your drive, direct URLs, or synchronized YouTube embeds with copyright-compliant platform controls.
-- 💎 **True Full HD (1080p @ 12 Mbps)**: Custom RFC 4566 SDP bandwidth injection and resolution preservation prevent browsers from downscaling to blurry 360p.
-- 🕒 **Sub-Second Drift Correction**: Presenter clock heartbeats and late-joiner recovery ensure all screens play the exact same millisecond.
-- 🍿 **Interactive Cinema Stage**: Responsive 16:9 theater, live emoji sparks, webcam grids, and collapsible chat drawer.
+> [!NOTE]
+> **Project Status**: MovieNight is an open-source, production-oriented prototype and experimental P2P screening application. It is designed and optimized for small private groups (tested 2–6 participants). An optional lightweight Node.js server component is provided strictly for CORS-restricted media proxying; no media or chat messages are stored on any server.
 
 ---
 
-## 🚀 Key Features
+## 🌟 Architectural Highlights
 
-### 1. 🎞️ Triple-Mode Video Pipeline
-- **Local Media Files**: Drop an `.mp4`, `.mkv`, `.webm`, `.mov`, or `.avi` from your desktop. The browser decodes it natively in hardware and broadcasts high-bitrate video/audio tracks via WebRTC mesh without uploading anywhere.
-- **Direct Video URLs & CDN Streams**: Stream web links directly. Includes built-in Range HTTP proxy support (`/proxy-video`) to defeat CORS limitations on external media servers.
-- **Platform Embeds (YouTube, Vimeo, Twitch)**: Synchronized embedding using official IFrame APIs and bidirectional `postMessage` protocol — copyright-compliant, high-fidelity, and synced across all viewers.
-
-### 2. ⚡ Full HD 1080p WebRTC Engineering
-- **RFC 4566 SDP Munging**: Injects bandwidth allocation (`b=AS:12000`, `b=TIAS:12000000`) up to 12 Mbps.
-- **High-Bitrate Fast Ramp**: Injects Google WebRTC parameters (`x-google-min-bitrate=2500; x-google-start-bitrate=6000; x-google-max-bitrate=12000`) into video payloads so connections start immediately in crisp HD instead of ramping up slowly from 300 kbps.
-- **Resolution Preservation**: Uses `degradationPreference = "maintain-resolution"` and `contentHint = "detail"`, forcing WebRTC to protect 1080p resolution rather than downscaling.
-- **Studio Audio**: Decodes 256 kbps Stereo Opus (`stereo=1; sprop-stereo=1; maxaveragebitrate=256000`) with native multi-channel surround sound downmix protection.
-
-### 3. ⏱️ Sub-Second Sync Engine
-- **Presenter Clock Beacon**: Presenter broadcasts periodic sync packets containing authoritative time, play/pause states, and high-resolution timestamps.
-- **Drift Auto-Correction**: Participants automatically align playback offset if network buffering causes $> 0.8$s drift.
-- **Late-Join Time Recovery**: Late-joining or reconnecting friends calculate network transit offset $\Delta t = (Date.now() - timestamp) / 1000$ and jump to the exact room position.
-- **Host Override Authority**: The room host can pause, resume, or seek the video even when another participant is presenting.
-
-### 4. 🍿 Movie Mode & Interactive Theater
-- **Cinema Layout**: Distraction-free 16:9 theater stage with responsive scaling and fullscreen mode (<kbd>F</kbd>).
-- **Simultaneous Webcams & Mics**: Participant video tiles line both sides of the cinema screen so you can watch each other's reactions without covering the movie.
-- **Live Emoji Sparks**: Real-time reaction overlays (`❤️`, `🔥`, `👏`, `😂`, `🍿`, `🎬`) burst across the room on click.
-- **Backrow Chat**: Collapsible side drawer with timestamps, auto-scroll, unread indicators, and customizable avatars.
-- **Generative Avatars**: SVG robot avatars generated procedurally from custom seeds with customizable facial expressions, mouth types, antennae, and colors.
-
-### 5. 🛡️ Room Governance & Security
-- **Knock & Approval Admission**: Strangers cannot crash private screening rooms; host receives an instant approval modal.
-- **Room Controls**: Host can kick users, force stop presenter streams, or migrate ownership if they depart.
-- **Zero Traces Left Behind**: Rooms are ephemeral — as soon as the last participant leaves, the room dissolves completely.
+- 🛡️ **No Media Server Architecture**: Video and audio frames are decoded in the browser and transmitted directly to peers using WebRTC DTLS/SRTP encryption. No video files or stream chunks are stored on or relayed through application servers.
+- ⚡ **Signaling via PeerJS**: Ephemeral room discovery, ICE candidate exchange, and SDP handshakes are coordinated via PeerJS cloud brokers (or self-hosted PeerServer). Once connected, the signaling server is bypassed for all media and room state.
+- 👥 **Optimized for Small Groups (2–6 Peers)**: Designed for private co-watching among friends without the infrastructure cost or complexity of an SFU (Selective Forwarding Unit) or MCU.
+- 🎥 **Triple-Mode Playback Pipeline**:
+  - **Local Files**: Browser hardware decodes `.mp4`, `.webm`, `.mov`, or `.mkv` files and broadcasts media tracks via `HTMLMediaElement.captureStream()`.
+  - **Direct URLs**: HTML5 `<video>` playback with built-in HTTP Range proxy support to handle third-party servers that restrict CORS headers.
+  - **YouTube Embeds**: Official YouTube IFrame Player API integration with bidirectional play, pause, and seek synchronization over WebRTC DataChannels.
+- 💎 **1080p WebRTC Negotiation Hints**: Injects RFC 4566 SDP bandwidth targets (`b=AS:12000`, `b=TIAS:12000000`, `x-google-start-bitrate=6000`) and encoder directives (`degradationPreference = "maintain-resolution"`, `contentHint = "detail"`) to optimize the browser pipeline for sharp text and 1080p video rather than default low-bitrate webcam tuning.
+- ⏱️ **Continuous Drift Correction**: Presenter clock heartbeats and latency compensation maintain near-synchronous playback with an automatic drift-correction threshold ($< 0.8$s).
+- 🍿 **Interactive Cinema Stage**: Responsive 16:9 cinema theater, webcam grid, live emoji reactions, Backrow chat, and procedural SVG avatars.
 
 ---
 
-## 📊 Feature Comparison
+## 📊 Capabilities & Specifications
 
-| Feature | MovieNight | Teleparty / Netflix Party | Discord Screen Share | Zoom / Meet |
-| :--- | :---: | :---: | :---: | :---: |
-| **Local File Streaming** | ✅ **Direct P2P (No Upload)** | ❌ No | ⚠️ Window Scrape | ⚠️ Laggy Window |
-| **1080p Full HD Free** | ✅ **Yes (12 Mbps)** | ⚠️ Platform Limited | ❌ Nitro Required ($9.99/mo) | ❌ 720p Cap |
-| **Account Required?** | ❌ **No (Zero Sign-up)** | ❌ Paid Account | ❌ Discord Account | ❌ Required |
-| **Media Stored on Server?** | ❌ **Never (Zero-Knowledge)**| ⚠️ Central Servers | ⚠️ Central Relays | ⚠️ Central Relays |
-| **YouTube Dual-Mode Sync** | ✅ **Native API + Embed** | ❌ No | ❌ No (Capture only) | ❌ Echo Issues |
-| **Client-Side Host Control** | ✅ **Full Authority** | ⚠️ Host Only | ❌ Presenter only | ⚠️ Host Mute only |
-| **Browser Extensions Needed?**| ❌ **None (Pure HTML5)** | ❌ Chrome Extension | ❌ App recommended | ❌ App recommended |
-| **Open Source** | ✅ **MIT License** | ❌ Proprietary | ❌ Proprietary | ❌ Proprietary |
+| Dimension | MovieNight Specification | Technical Implementation |
+| :--- | :--- | :--- |
+| **Network Topology** | Full Mesh (P2P) | Direct peer-to-peer WebRTC connections between all participants |
+| **Signaling Dependency** | PeerJS Broker / Cloud | Initial SDP Offer/Answer handshake and ICE candidate exchange |
+| **Recommended Group Size** | **2–6 participants** | Mesh upload bandwidth scales linearly ($N-1$ outbound streams per presenter) |
+| **Media Server Storage** | **None (0 MB stored)** | Audio/video decoded locally; exists solely in peer browser memory |
+| **Application Database** | **None** | Ephemeral room state; rooms dissolve when the last participant departs |
+| **Target Video Quality** | Up to 1080p @ 30–60 fps | SDP bandwidth hints (`b=AS:12000`); bounded by client CPU and upload bandwidth |
+| **Target Audio Quality** | Up to 256 kbps Stereo | RFC 7587 Stereo Opus negotiation (`stereo=1; maxaveragebitrate=256000`) |
+| **Sync Accuracy Target** | Near-sync (drift $< 0.8$s) | 1000ms periodic heartbeat + network transit offset compensation |
+| **Transport Separation** | SRTP (Media) + SCTP (Control) | Dedicated media tracks for video/audio; DataChannels for chat and sync |
+| **Access Control** | Knock & Approval Admission | 6-character room codes (`ABC-123`) with host-approved entry modal |
+| **CORS Media Proxy** | Optional Node.js Service | HTTP Range forwarder (`/proxy-video`) for external media URLs lacking CORS |
 
 ---
 
 ## 🏗️ Architecture & How It Works
 
-```
-                     +-----------------------------+
-                     |   PeerJS Cloud / Broker     |
-                     |   (Signaling & ICE Discovery)
-                     +--------------+--------------+
-                                    |
-          Room Connection Request   |   SDP Offer / Answer & ICE
-          (Knock & Approval)        |   (RFC 4566 Munged @ 12 Mbps)
-                                    v
-     +-------------------------------------------------------------+
-     |                                                             |
-     v                                                             v
-+----+----------------------+                    +-----------------+-------------------+
-|     PRESENTER / HOST      |  WebRTC P2P Mesh   |          PARTICIPANT 1              |
-|                           |===================>|                                     |
-|  - video.captureStream()  |  1080p Video Track |  - remoteStream -> <video>          |
-|  - Stereo Opus Audio      |  256 kbps Audio    |  - Sub-second Heartbeat Sync Engine |
-|  - Authoritative Clock    |  DataChannel Sync  |  - Bidirectional Emoji Reactions    |
-+-------------+-------------+                    +-----------------+-------------------+
-              |                                                    ^
-              |               WebRTC Mesh Connection               |
-              +====================================================+
-              |
-              v
-+-------------+---------------------+
-|        PARTICIPANT 2              |
-|                                   |
-|  - Webcams & Mics Mesh            |
-|  - Backrow Chat DataChannel       |
-+-----------------------------------+
-```
+### 1. Connection & Transport Separation
 
-### Video Stream Quality Pipeline
+MovieNight strictly separates media streaming from control signaling:
+- **Media Plane (SRTP)**: Real-time audio and video tracks flow directly between peer browsers over encrypted DTLS-SRTP.
+- **Control Plane (SCTP DataChannel)**: Room events, chat messages, emoji reactions, and playback heartbeats flow across bidirectional WebRTC DataChannels.
 
 ```
-[Local File / Direct URL / YouTube]
-                 │
-                 ▼
-      [Native HTML5 Video Element]
-                 │
-                 ├─► video.captureStream()
-                 │   └─► track.contentHint = "detail"
-                 │
-                 ├─► Native Decoded Stereo Audio (48 kHz)
-                 │
-                 ▼
-   [PeerConnection setLocalDescription]
-                 │
-                 ├─► SDP Munge: b=AS:12000 / b=TIAS:12000000
-                 ├─► SDP Munge: x-google-start-bitrate=6000
-                 ├─► SDP Munge: stereo=1; maxaveragebitrate=256000
-                 │
-                 ▼
-  [Sender degradationPreference: "maintain-resolution"]
-                 │
-                 ▼
-  [WebRTC Encrypted SRTP Mesh Delivery (1080p @ 60fps)]
+                         +-----------------------------+
+                         |    PeerJS Cloud / Broker    |
+                         |  (Signaling & ICE Discovery)|
+                         +--------------+--------------+
+                                        |
+              Room Connection Request   |   SDP Offer / Answer & ICE
+              (Knock & Approval)        |   (Target 12 Mbps SDP Hints)
+                                        v
+         +-------------------------------------------------------------+
+         |                                                             |
+         v                                                             v
++--------+-------------+                                     +---------+-----------+
+|    PRESENTER / HOST  |                                     |    PARTICIPANT 1    |
+|                      |             WebRTC P2P Mesh         |                     |
+|  - video element     |====================================>|  - remote <video>   |
+|  - captureStream()   |       SRTP: Video & Opus Audio      |  - Drift Corrector  |
+|  - Clock Authority   |------------------------------------>|  - Chat & Reactions |
++--------+-------------+        SCTP: DataChannel Sync       +---------+-----------+
+         |                                                             ^
+         |                    WebRTC P2P Mesh                          |
+         +=============================================================+
+         |
+         v
++--------+-------------+
+|    PARTICIPANT 2     |
+|                      |
+|  - Webcams & Mics    |
+|  - Backrow Chat      |
++----------------------+
 ```
+
+### 2. Video Stream Quality Optimization Pipeline
+
+WebRTC was originally designed for low-bandwidth video calling, defaulting to conservative bitrates (300 kbps) and dropping resolution under CPU or network load. MovieNight optimizes this pipeline:
+
+```
+[Local Video / Web URL / YouTube]
+               │
+               ▼
+ [Native HTML5 Video Element]
+               │
+               ├─► video.captureStream() ──► track.contentHint = "detail"
+               │
+               ├─► Native Decoded Stereo Audio (48 kHz)
+               │
+               ▼
+ [PeerConnection setLocalDescription]
+               │
+               ├─► SDP Munge: b=AS:12000 / b=TIAS:12000000 (12 Mbps ceiling hint)
+               ├─► SDP Munge: x-google-start-bitrate=6000 (Instant HD fast ramp)
+               ├─► SDP Munge: stereo=1; sprop-stereo=1; maxaveragebitrate=256000
+               │
+               ▼
+[Sender degradationPreference: "maintain-resolution"]
+               │
+               ▼
+[Encrypted SRTP Mesh Delivery (Target 1080p @ 30-60 fps)]
+```
+
+*Note: SDP attributes serve as negotiation hints. Final delivered bitrate and frame rate adapt dynamically via WebRTC's congestion control algorithms based on available peer-to-peer network capacity and client hardware limits.*
+
+---
+
+## ⏱️ Synchronization Architecture
+
+MovieNight achieves near-synchronized playback across different network connections without a central media server using an authoritative client clock with transit compensation.
+
+```
+PRESENTER                                                   PARTICIPANT
+    │                                                            │
+    │ ─── 1. Emits Heartbeat (T = 1.0s) ───────────────────────► │
+    │     { currentTime: 142.5, paused: false, timestamp: t0 }   │
+    │                                                            │
+    │                                                            │ ─── 2. Computes Transit Latency:
+    │                                                            │        Δt = (Date.now() - t0) / 1000
+    │                                                            │
+    │                                                            │ ─── 3. Computes Target Position:
+    │                                                            │        targetTime = currentTime + Δt
+    │                                                            │
+    │                                                            │ ─── 4. Evaluates Drift:
+    │                                                            │        drift = |localTime - targetTime|
+    │                                                            │        • If drift > 0.8s: seekTo(targetTime)
+    │                                                            │        • If drift ≤ 0.8s: ignore (prevent stutter)
+    │                                                            │
+    │ ◄── 5. Host Override (Pause / Seek / Play) ─────────────── │
+```
+
+### Protocol Steps:
+1. **Heartbeat Beacon**: The active presenter broadcasts a sync payload every 1000ms over the DataChannel:
+   $$\{ \text{currentTime}, \text{duration}, \text{paused}, \text{timestamp: Date.now()} \}$$
+2. **Transit Latency Estimation**: The participant calculates one-way transit delay:
+   $$\Delta t = \frac{\text{Date.now()} - \text{timestamp}}{1000}$$
+3. **Expected Position Calculation**:
+   $$\text{targetTime} = \text{currentTime} + (\text{paused} ? 0 : \Delta t)$$
+4. **Drift Evaluation**:
+   $$\text{drift} = |\text{localPlaybackTime} - \text{targetTime}|$$
+   - **Threshold breached ($\text{drift} > 0.8\text{s}$)**: The participant smoothly seeks to `targetTime`.
+   - **Within tolerance ($\text{drift} \le 0.8\text{s}$)**: Normal playback continues uninterrupted, avoiding micro-stutters.
+5. **Late-Joiner Recovery**: When a new viewer joins mid-screening, they receive the room's current state and apply $\Delta t$ to jump immediately to the current playback position.
+6. **Host Override Authority**: If the room host is not the presenter, host playback actions (play, pause, seek) broadcast high-priority control packets that override local client states.
+
+---
+
+## 🌐 Connectivity Model & NAT Traversal
+
+MovieNight relies on WebRTC's Interactive Connectivity Establishment (ICE) protocol:
+
+- **STUN Discovery**: Uses public Google STUN servers (`stun:stun.l.google.com:19302`) to discover external public IP addresses and UDP port mappings.
+- **NAT Traversal Capability**: Successfully establishes direct peer-to-peer connections across Full-Cone NAT, Address-Restricted NAT, and Port-Restricted NAT configurations (standard for most home broadband and consumer Wi-Fi networks).
+- **Symmetric NAT & Enterprise Firewalls**: When two connecting peers are both behind symmetric NATs (common in corporate, university, or strict cellular networks), direct UDP socket pairs cannot be negotiated using STUN alone. In such environments, a **TURN relay server** (RFC 5766) is required. Users deploying in enterprise environments can configure custom TURN credentials in the PeerJS connection options.
+
+---
+
+## 📱 Browser Compatibility Matrix
+
+| Feature | Chrome / Edge (v90+) | Firefox (v95+) | Safari macOS (v15+) | Mobile Safari / Chrome |
+| :--- | :---: | :---: | :---: | :---: |
+| **Local File Streaming** | ✅ Full Support | ✅ Full Support | ⚠️ Supported (H.264/AAC) | ❌ Restricted (File picker/upload limitations) |
+| **Direct URL Streaming** | ✅ Full Support | ✅ Full Support | ✅ Full Support | ⚠️ View only (Autoplay restrictions) |
+| **YouTube Embed Sync** | ✅ Full Support | ✅ Full Support | ✅ Full Support | ⚠️ View only (Requires initial tap to unmute) |
+| **Screen / Tab Sharing** | ✅ Full Support | ✅ Full Support | ⚠️ Screen only | ❌ OS Restricted |
+| **Webcam & Mic Mesh** | ✅ Full Support | ✅ Full Support | ✅ Full Support | ⚠️ Single active camera stream |
+| **SDP Bandwidth Munging**| ✅ Full Support | ⚠️ Partial (RFC 4566) | ⚠️ Partial | ⚠️ Standard WebRTC defaults |
+
+---
+
+## 🔒 Security, Privacy & Threat Model
+
+### Security Architecture
+- **In-Transit Encryption**: All peer-to-peer audio, video, and DataChannel payloads are encrypted end-to-end using browser-enforced **DTLS** (Datagram Transport Layer Security) and **SRTP** (Secure Real-time Transport Protocol).
+- **Ephemeral In-Memory Operation**: MovieNight operates with zero database persistence. Room codes, participant lists, and chat messages exist solely in the browser memory of active participants and vanish when the room closes.
+- **Admission Control**: Private screening rooms require the host to explicitly approve each participant via a Knock-and-Approval modal.
+
+### Threat Model & Mitigations
+
+| Threat Vector | Risk Level | Mitigation Strategy |
+| :--- | :---: | :--- |
+| **Room Code Guessing / Brute Force** | Medium | Rooms use random 6-character alphanumeric codes. Even if guessed, the host must manually admit the participant via the admission modal. |
+| **Malicious External Video URLs** | Low/Medium | Video URLs are loaded into standard HTML5 `<video>` elements or sandboxed YouTube `<iframe>` elements. No user-supplied scripts are evaluated. |
+| **Signaling Broker Metadata** | Low | The public PeerJS signaling server observes connection metadata (IP addresses, peer IDs) during handshake. For total network autonomy, self-host [PeerServer](https://github.com/peers/peerjs-server). |
+| **CORS Proxy Abuse** | Low/Medium | The Node.js `/proxy-video` endpoint validates URL protocols (`http:`, `https:`), enforces a maximum of 5 redirects, and only proxies binary media streams. It is not an open general-purpose proxy. |
+
+> [!WARNING]
+> **Proxy Scope Notice**: The included Node.js `/proxy-video` proxy forwards HTTP Range requests with CORS headers to enable video capture. It is a streaming forwarder, **not** an antivirus, deep-packet-inspection, or content-sanitization firewall. Do not paste untrusted URLs from unknown sources.
+
+---
+
+## ⚠️ Known Limitations
+
+1. **P2P Mesh Bandwidth Scaling**: Because MovieNight uses a peer-to-peer mesh rather than an SFU relay, the presenter's computer must upload separate video streams to every viewer ($N-1$ outbound streams). A 1080p stream at 6 Mbps with 4 viewers requires $\approx 24$ Mbps upload bandwidth. For this reason, MovieNight is designed for small groups (2–6 users).
+2. **Codec Compatibility**: Local file playback relies on native browser decoder support. Standard `.mp4` (H.264 / AAC) and `.webm` (VP8/VP9 / Opus) work seamlessly across all platforms. Proprietary formats such as HEVC/H.265 or Dolby DTS audio may not decode in browsers lacking hardware licenses.
+3. **Autoplay Policies**: Modern browsers prohibit media from playing with sound automatically without prior user interaction. Remote YouTube embeds and direct streams start muted by default; viewers must click once to enable audio.
+4. **Mobile Background Throttling**: Mobile operating systems (iOS and Android) pause WebRTC video processing and camera tracks when the browser tab is sent to the background.
 
 ---
 
 ## 💻 Quickstart & Local Development
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) 16+ (or any modern web server)
-- Modern browser with WebRTC support (Chrome, Edge, Firefox, Brave, Safari)
+- [Node.js](https://nodejs.org/) 18+ (or any static HTTP server)
+- Modern web browser with WebRTC support
 
-### 1. Clone the Repository
+### 1. Clone & Install
 ```bash
-git clone https://github.com/SageGallant/movienight.git
+git clone https://github.com/sagegallant/movienight.git
 cd movienight
-```
-
-### 2. Install Dependencies
-```bash
 npm install
 ```
 
-### 3. Start the Development Server
+### 2. Start the Application
 ```bash
 npm start
 ```
 The server will start at `http://localhost:3000`.
 
-### 4. Create or Join a Room
+### 3. Usage
 1. Open `http://localhost:3000` in your browser.
-2. Enter your display name and choose an avatar.
-3. Click **START A NEW SCREENING** to create a room.
-4. Copy the room code (`ABC-123`) or share the invite URL (`http://localhost:3000/?room=ABC123`).
-5. Open a second tab or send the link to a friend to join.
-6. Click **STREAM A VIDEO** to choose a local movie or paste a video/YouTube URL!
+2. Enter your display name, choose an avatar, and click **START A NEW SCREENING**.
+3. Share the room code (`ABC-123`) or direct link (`http://localhost:3000/?room=ABC123`) with a friend.
+4. When your friend joins, click **Admit** on the host modal.
+5. Click **STREAM A VIDEO** to drop a local movie or paste a direct media URL!
 
 ---
 
 ## 🌐 Deployment Options
 
-MovieNight is engineered to run as a **zero-configuration static site** or with an **optional proxy server**.
+### Option A: GitHub Pages (Zero Server Costs)
+MovieNight can run purely client-side on GitHub Pages. The repository includes an automated GitHub Actions deployment workflow ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)):
 
-### Option A: GitHub Pages (1-Click Static Deployment)
-Deploy effortlessly using the included GitHub Pages workflow:
+1. Fork this repository.
+2. Navigate to **Settings > Pages**.
+3. Under **Build and deployment > Source**, select **GitHub Actions**.
+4. Push to `main` to trigger the deployment.
 
-```bash
-npm run deploy:gh-pages
-```
+*Note: GitHub Pages deployment operates without the Node.js CORS proxy. Local video files, synchronized YouTube embeds, and CORS-enabled CDN links work seamlessly.*
 
-Or deploy manually via GitHub Settings:
-1. Fork or push this repository to GitHub.
-2. Go to **Settings > Pages**.
-3. Under **Build and deployment > Branch**, select `gh-pages` (or `main`) and `/ (root)`.
-4. Visit `https://<your-username>.github.io/<repo-name>/`.
-
-### Option B: Node.js VPS / Docker
-Running `node server.js` provides the built-in HTTP Range CORS proxy (`/proxy-video`), enabling playback of external video URLs whose hosts do not provide CORS headers:
+### Option B: Self-Hosted Node.js VPS (With CORS Proxy)
+To enable streaming of external video URLs whose origin servers block CORS:
 
 ```bash
-# Run in background with PM2
+# Production setup with PM2
 npm install -g pm2
 pm2 start server.js --name "movienight"
+pm2 startup
+pm2 save
 ```
-
-### Option C: Static Hosting (Vercel, Netlify, Cloudflare Pages)
-Simply connect your repository to Vercel, Netlify, or Cloudflare Pages. No build command is required — set the publish directory to `./` (root).
 
 ---
 
@@ -232,40 +297,36 @@ Simply connect your repository to Vercel, Netlify, or Cloudflare Pages. No build
 
 ## 🛠️ Technology Stack
 
-- **Core**: Vanilla HTML5, Modern CSS3, Vanilla ECMAScript (ES6+)
+- **Core**: Vanilla ECMAScript (ES6+), HTML5 Semantic Markup, Modern CSS3
 - **Networking**: [WebRTC](https://webrtc.org/) (Real-Time Communication) & [PeerJS](https://peerjs.com/)
-- **Audio & Video Engine**: HTML5 Media CaptureStream API, Web Audio API, RFC 4566 SDP Munging
-- **Embeds**: YouTube IFrame Player API with bidirectional message synchronization
-- **Proxy Server**: Node.js `http`, `https`, and Stream Pipelines with HTTP Range requests
-- **Icons & Visuals**: Font Awesome 6, Procedural SVG generative avatars
+- **Media Engine**: HTML5 Media CaptureStream API, Web Audio API, RFC 4566 SDP Munging
+- **Player Sync**: YouTube IFrame Player API with bidirectional DataChannel message synchronization
+- **CORS Proxy**: Node.js `http`/`https` streaming pipelines with HTTP Range request forwarding
+- **Icons & Visuals**: Font Awesome 6, Procedural generative SVG avatars
 
 ---
 
-## 🔒 Security & Privacy Notice
+## 📄 Changelog & Versioning
 
-- **Zero Data Retention**: MovieNight operates with zero server-side databases. Messages and media streams exist only in peer memory.
-- **End-to-End Encryption**: WebRTC connections are cryptographically encrypted via DTLS/SRTP by the browser.
-- **Directory Traversal Protection**: The included Node.js server strictly validates paths to prevent path traversal (`../`) vulnerabilities.
-- **CORS Video Proxy**: Proxies only requested video binary chunks with content sanitization.
-- **Copyright Compliance**: YouTube, Vimeo, and Facebook videos are embedded directly using official platform player APIs rather than extracted, honoring platform terms of service.
+MovieNight adheres to [Semantic Versioning](https://semver.org/). See the complete version history in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
 ## 🤝 Contributing
 
-Contributions make the open-source community thrive! Any improvements, bug fixes, or suggestions are welcome.
+Contributions are welcome! Whether filing bug reports, improving documentation, or optimizing the WebRTC sync engine:
 
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'feat: Add AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+1. Fork the Project.
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`).
+3. Commit your Changes (`git commit -m 'feat: Add AmazingFeature'`).
+4. Push to the Branch (`git push origin feature/AmazingFeature`).
+5. Open a Pull Request using our [PR Template](.github/pull_request_template.md).
 
 ---
 
 ## 📄 License
 
-Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for more information.
+Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
 
 ---
 
