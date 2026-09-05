@@ -21,6 +21,21 @@ const state = {
   hostClaimRetries: 0,
   joinRetries: 0,
   movieMode: false,
+
+  // Host Approval & Controls
+  pendingJoinRequests: {}, // peerId -> { conn, metadata }
+  isJoinApproved: false,
+  currentApprovalPeerId: null,
+
+  // Group Video Watching
+  groupVideoStream: null,
+  groupVideoElement: null,
+  groupVideoCalls: {},
+  isGroupVideoPresenter: false,
+
+  // Webcam Watch Together
+  webcamStream: null,
+  webcamCalls: {},
 };
 
 // ============================================================
@@ -46,6 +61,8 @@ const elements = {
   // Room header
   roomInfoBtn:          document.getElementById("room-info-btn"),
   participantCount:     document.getElementById("participant-count"),
+  groupVideoBtn:        document.getElementById("group-video-btn"),
+  toggleCameraBtn:      document.getElementById("toggle-camera-btn"),
   shareScreenBtn:       document.getElementById("share-screen-btn"),
   movieModeBtn:         document.getElementById("movie-mode-btn"),
   copyRoomLinkBtn:      document.getElementById("copy-room-link-btn"),
@@ -60,6 +77,7 @@ const elements = {
   closeRoomInfoBtn:     document.getElementById("close-room-info"),
   ripRoomId:            document.getElementById("rip-room-id"),
   ripCopyIdBtn:         document.getElementById("rip-copy-id"),
+  ripInviteBtn:         document.getElementById("rip-invite-btn"),
   participantsList:     document.getElementById("participants-list"),  // in panel
 
   // Sidebar
@@ -74,11 +92,34 @@ const elements = {
   messageInput:         document.getElementById("message-input"),
   sendMessageBtn:       document.getElementById("send-message-btn"),
 
-  // Screen share
+  // Screen share & Group video
   screenShareContainer: document.getElementById("screen-share-container"),
   screenShareVideo:     document.getElementById("screen-share-video"),
   screenShareUser:      document.getElementById("screen-share-user"),
+  streamTypeIcon:       document.getElementById("stream-type-icon"),
   stopScreenShareBtn:   document.getElementById("stop-screen-share"),
+  hostStopScreenShareBtn: document.getElementById("host-stop-screen-share"),
+  webcamGrid:           document.getElementById("webcam-grid"),
+
+  // Video source modal
+  videoSourceModal:     document.getElementById("video-source-modal"),
+  closeVideoModalBtn:   document.getElementById("close-video-modal"),
+  videoFileInput:       document.getElementById("video-file-input"),
+  playDeviceVideoBtn:   document.getElementById("play-device-video-btn"),
+  videoUrlInput:        document.getElementById("video-url-input"),
+  playUrlVideoBtn:      document.getElementById("play-url-video-btn"),
+  sampleBtns:           document.querySelectorAll(".sample-btn"),
+
+  // Join approval modals
+  joinRequestModal:     document.getElementById("join-request-modal"),
+  approvalUserAvatar:   document.getElementById("approval-user-avatar"),
+  approvalUserName:     document.getElementById("approval-user-name"),
+  approveJoinBtn:       document.getElementById("approve-join-btn"),
+  denyJoinBtn:          document.getElementById("deny-join-btn"),
+
+  // Join waiting modal
+  joinWaitingModal:     document.getElementById("join-waiting-modal"),
+  cancelJoinRequestBtn: document.getElementById("cancel-join-request-btn"),
 };
 
 let heartbeatInterval = null;
@@ -123,13 +164,54 @@ function setupEventListeners() {
     if (e.key === "Enter") sendMessage();
   });
   elements.shareScreenBtn.addEventListener("click", startScreenShare);
-  elements.stopScreenShareBtn.addEventListener("click", stopScreenShare);
-  elements.copyRoomIdBtn.addEventListener("click", copyRoomIdToClipboard);
+  elements.stopScreenShareBtn.addEventListener("click", () => {
+    if (state.isGroupVideoPresenter) stopGroupVideo();
+    else stopScreenShare();
+  });
+  if (elements.hostStopScreenShareBtn) {
+    elements.hostStopScreenShareBtn.addEventListener("click", () => {
+      if (state.screenShareUserId) hostForceStopScreenShare(state.screenShareUserId);
+    });
+  }
+  if (elements.copyRoomIdBtn) {
+    elements.copyRoomIdBtn.addEventListener("click", copyRoomIdToClipboard);
+  }
   if (elements.copyRoomLinkBtn) {
     elements.copyRoomLinkBtn.addEventListener("click", copyRoomLinkToClipboard);
   }
   if (elements.ripCopyIdBtn) {
     elements.ripCopyIdBtn.addEventListener("click", copyRoomIdToClipboard);
+  }
+  if (elements.ripInviteBtn) {
+    elements.ripInviteBtn.addEventListener("click", inviteUser);
+  }
+
+  // Group Video Watching
+  if (elements.groupVideoBtn) {
+    elements.groupVideoBtn.addEventListener("click", openVideoSourceModal);
+  }
+  if (elements.closeVideoModalBtn) {
+    elements.closeVideoModalBtn.addEventListener("click", closeVideoSourceModal);
+  }
+  if (elements.playDeviceVideoBtn) {
+    elements.playDeviceVideoBtn.addEventListener("click", handleDeviceVideoSubmit);
+  }
+  if (elements.playUrlVideoBtn) {
+    elements.playUrlVideoBtn.addEventListener("click", handleUrlVideoSubmit);
+  }
+  if (elements.sampleBtns) {
+    elements.sampleBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const url = btn.getAttribute("data-url");
+        if (elements.videoUrlInput) elements.videoUrlInput.value = url;
+        startGroupVideoFromUrl(url, btn.textContent.trim());
+      });
+    });
+  }
+
+  // Camera Watch Together
+  if (elements.toggleCameraBtn) {
+    elements.toggleCameraBtn.addEventListener("click", toggleCamera);
   }
 
   // Movie mode
@@ -140,9 +222,28 @@ function setupEventListeners() {
   elements.closeRoomInfoBtn.addEventListener("click", closeRoomInfoPanel);
   elements.roomInfoOverlay.addEventListener("click", closeRoomInfoPanel);
 
-  // Sidebar toggle
-  elements.toggleSidebarBtn.addEventListener("click", toggleSidebar);
+  // Sidebar & message bar toggle button: opens/toggles room info panel showing all participants!
+  if (elements.toggleSidebarBtn) {
+    elements.toggleSidebarBtn.addEventListener("click", () => {
+      if (!elements.roomInfoPanel.classList.contains("hidden")) {
+        closeRoomInfoPanel();
+      } else {
+        openRoomInfoPanel();
+      }
+    });
+  }
   elements.closeSidebarBtn.addEventListener("click", closeSidebar);
+
+  // Host Approval Modals
+  if (elements.approveJoinBtn) {
+    elements.approveJoinBtn.addEventListener("click", handleApproveJoin);
+  }
+  if (elements.denyJoinBtn) {
+    elements.denyJoinBtn.addEventListener("click", handleDenyJoin);
+  }
+  if (elements.cancelJoinRequestBtn) {
+    elements.cancelJoinRequestBtn.addEventListener("click", handleCancelJoinRequest);
+  }
 }
 
 // ============================================================
@@ -389,7 +490,7 @@ function initializePeer(peerId) {
       handlePeerConnection(conn);
     });
 
-    // Handle incoming media calls (screen sharing)
+    // Handle incoming media calls (screen share, group video, webcam)
     state.peer.on("call", (call) => {
       console.log("Incoming media call from:", call.peer, call.metadata);
       if (call.metadata && call.metadata.type === "screen_share") {
@@ -399,14 +500,48 @@ function initializePeer(peerId) {
           state.screenShareUser = call.metadata?.username || "Participant";
           state.screenShareUserId = call.metadata?.userId || null;
           elements.screenShareContainer.classList.remove("hidden");
+          elements.screenShareVideo.classList.remove("hidden");
           elements.screenShareVideo.srcObject = remoteStream;
           elements.screenShareUser.textContent = state.screenShareUser;
+          if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
           elements.stopScreenShareBtn.classList.add("hidden");
-          // Auto activate movie mode for remote viewer
           if (!state.movieMode) activateMovieMode();
+          updateParticipantsUI();
         });
         call.on("close", () => handleScreenShareStop());
         call.on("error", (err) => { console.error("Screen share call error:", err); handleScreenShareStop(); });
+      } else if (call.metadata && call.metadata.type === "group_video") {
+        call.answer();
+        call.on("stream", (remoteStream) => {
+          console.log("Received remote group video stream");
+          state.screenShareUser = `${call.metadata?.username || "Host"} (streaming: ${call.metadata?.title || "Video"})`;
+          state.screenShareUserId = call.metadata?.userId || null;
+          elements.screenShareContainer.classList.remove("hidden");
+          elements.screenShareVideo.classList.remove("hidden");
+          if (elements.screenShareVideo.src) {
+            elements.screenShareVideo.removeAttribute("src");
+            elements.screenShareVideo.load();
+          }
+          elements.screenShareVideo.srcObject = remoteStream;
+          elements.screenShareVideo.play().catch(e => console.log("Stream play error:", e));
+          elements.screenShareUser.textContent = state.screenShareUser;
+          if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
+          elements.stopScreenShareBtn.classList.add("hidden");
+          if (!state.movieMode) activateMovieMode();
+          showToast(`${call.metadata?.username || "Host"} started streaming a video! 🎬`, "info");
+          updateParticipantsUI();
+        });
+        call.on("close", () => handleGroupVideoStop());
+        call.on("error", (err) => { console.error("Group video call error:", err); handleGroupVideoStop(); });
+      } else if (call.metadata && call.metadata.type === "webcam") {
+        call.answer();
+        call.on("stream", (remoteStream) => {
+          console.log("Received remote webcam stream from:", call.metadata?.username);
+          addWebcamTile(call.metadata?.userId, call.metadata?.username || "User", remoteStream, false);
+        });
+        call.on("close", () => {
+          if (call.metadata?.userId) removeWebcamTile(call.metadata.userId);
+        });
       }
     });
 
@@ -419,6 +554,7 @@ function initializePeer(peerId) {
           setTimeout(() => { if (state.peer && !state.peer.destroyed) connectToPeer(state.roomId); }, 1500);
           return;
         }
+        if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
         displayConnectionStatus("error", "Room not found or no longer available");
         showError("Room not found or no longer available. Please check the room ID and try again.");
       } else if (err.type === "network" || err.type === "server-error") {
@@ -474,32 +610,40 @@ function connectToPeer(peerId) {
   console.log("Connecting to peer:", peerId);
   try {
     displayConnectionStatus("connecting", `Connecting to room ${peerId}...`);
+    // Show waiting modal for join approval
+    if (elements.joinWaitingModal) {
+      elements.joinWaitingModal.classList.remove("hidden");
+    }
+
     const conn = state.peer.connect(peerId, {
-      metadata: { userId: state.userId, username: state.username, avatar: state.avatar, joinRequest: true, timestamp: Date.now() },
+      metadata: {
+        userId: state.userId,
+        username: state.username,
+        avatar: state.avatar,
+        joinRequest: true,
+        peerId: state.peerId,
+        timestamp: Date.now()
+      },
       reliable: true,
       serialization: "json",
     });
     if (conn) {
       handlePeerConnection(conn);
       setTimeout(() => {
-        if (state.connectionStatus !== "connected" && conn.peer === peerId && !conn.isConnectionOpen) {
+        if (state.connectionStatus !== "connected" && conn.peer === peerId && !conn.isConnectionOpen && !state.isJoinApproved) {
+          if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
           displayConnectionStatus("error", "Connection timeout");
-          const retryMessage = document.createElement("div");
-          retryMessage.className = "retry-message";
-          retryMessage.innerHTML = `
-            <button class="retry-btn">Retry Connection</button>
-            <button class="cancel-btn">Go Back</button>
-          `;
-          elements.messagesContainer.appendChild(retryMessage);
-          retryMessage.querySelector(".retry-btn").addEventListener("click", () => { retryMessage.remove(); retryConnection(); });
-          retryMessage.querySelector(".cancel-btn").addEventListener("click", () => { retryMessage.remove(); resetRoom(); });
+          showError("Could not reach room host. Please check room code.");
+          resetRoom();
         }
-      }, 12000);
+      }, 15000);
     } else {
+      if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
       showError("Failed to connect to the room");
     }
   } catch (error) {
     console.error("Error connecting to peer:", error);
+    if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
     showError("Connection error: " + error.message);
   }
 }
@@ -512,33 +656,157 @@ function handlePeerConnection(conn) {
   conn.on("open", () => {
     console.log("Connected to peer:", conn.peer);
     conn.isConnectionOpen = true;
+
     if (state.screenShareStream) callPeerForScreenShare(conn.peer, state.screenShareStream);
+    if (state.groupVideoStream) callPeerForGroupVideo(conn.peer, state.groupVideoStream, "Video");
+    if (state.webcamStream) callPeerForWebcam(conn.peer, state.webcamStream);
+
+    // Host receives a join request from a new user
     if (conn.metadata?.joinRequest && state.isRoomCreator) {
-      setTimeout(() => sendRoomInfo(conn), 500);
-    }
-    if (conn.peer === state.roomId && !state.isRoomCreator) {
-      displayRoom();
-      displayConnectionStatus("connected", "Joined room successfully");
-      addSelfToParticipants();
+      queueJoinRequest(conn, conn.metadata);
     }
   });
+
   conn.on("data", (data) => handleIncomingData(conn, data));
   conn.on("close", () => handlePeerDisconnect(conn.peer));
   conn.on("error", (err) => {
     console.error("Connection error with:", conn.peer, err);
-    if (conn.peer === state.roomId && !state.isRoomCreator) {
-      displayConnectionStatus("error", "Connection error: " + err.message);
-      const retryMessage = document.createElement("div");
-      retryMessage.className = "retry-message";
-      retryMessage.innerHTML = `
-        <button class="retry-btn">Retry Connection</button>
-        <button class="cancel-btn">Go Back</button>
-      `;
-      elements.messagesContainer.appendChild(retryMessage);
-      retryMessage.querySelector(".retry-btn").addEventListener("click", () => { retryMessage.remove(); retryConnection(); });
-      retryMessage.querySelector(".cancel-btn").addEventListener("click", () => { retryMessage.remove(); resetRoom(); });
+    if (conn.peer === state.roomId && !state.isRoomCreator && !state.isJoinApproved) {
+      if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+      showError("Connection error: " + err.message);
+      resetRoom();
     }
   });
+}
+
+// ============================================================
+// Join Approval Workflow (Host & Joiner)
+// ============================================================
+function queueJoinRequest(conn, metadata) {
+  state.pendingJoinRequests[conn.peer] = { conn, metadata };
+  showNextJoinRequest();
+}
+
+function showNextJoinRequest() {
+  const peerIds = Object.keys(state.pendingJoinRequests);
+  if (peerIds.length === 0) {
+    if (elements.joinRequestModal) elements.joinRequestModal.classList.add("hidden");
+    state.currentApprovalPeerId = null;
+    return;
+  }
+  const peerId = peerIds[0];
+  state.currentApprovalPeerId = peerId;
+  const req = state.pendingJoinRequests[peerId];
+  if (elements.approvalUserAvatar) elements.approvalUserAvatar.src = req.metadata.avatar || "";
+  if (elements.approvalUserName) elements.approvalUserName.textContent = req.metadata.username || "User";
+  if (elements.joinRequestModal) elements.joinRequestModal.classList.remove("hidden");
+  showToast(`${req.metadata.username} requested to join the room 🔔`, "info", 5000);
+}
+
+function handleApproveJoin() {
+  const peerId = state.currentApprovalPeerId;
+  if (!peerId || !state.pendingJoinRequests[peerId]) return;
+  const { conn, metadata } = state.pendingJoinRequests[peerId];
+  delete state.pendingJoinRequests[peerId];
+
+  conn.send({ type: "join_approved", hostUserId: state.userId });
+  setTimeout(() => {
+    sendRoomInfo(conn);
+    broadcastNewParticipant(metadata);
+  }, 200);
+
+  showToast(`Approved ${metadata.username}!`, "success");
+  showNextJoinRequest();
+}
+
+function handleDenyJoin() {
+  const peerId = state.currentApprovalPeerId;
+  if (!peerId || !state.pendingJoinRequests[peerId]) return;
+  const { conn, metadata } = state.pendingJoinRequests[peerId];
+  delete state.pendingJoinRequests[peerId];
+
+  conn.send({ type: "join_rejected", reason: "Host declined your request to join." });
+  setTimeout(() => {
+    try { conn.close(); } catch (e) {}
+  }, 500);
+
+  showToast(`Declined request from ${metadata.username}.`, "info");
+  showNextJoinRequest();
+}
+
+function handleCancelJoinRequest() {
+  if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+  showToast("Join request cancelled.", "info");
+  resetRoom();
+}
+
+function handleJoinApproved(data) {
+  if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+  state.isJoinApproved = true;
+  displayRoom();
+  displayConnectionStatus("connected", "Joined room successfully");
+  addSelfToParticipants();
+  showToast("Approved by host! Welcome to the room 🎉", "success");
+}
+
+function handleJoinRejected(data) {
+  if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+  showError(data.reason || "Your request to join was declined by the room host.");
+  resetRoom();
+}
+
+// ============================================================
+// Host User Management & Stream Control
+// ============================================================
+function hostKickUser(userId, username) {
+  if (!state.isRoomCreator) return;
+  broadcastToPeers({ type: "remove_user", targetUserId: userId });
+  const participant = state.participants[userId];
+  if (participant && state.connections[participant.peerId]) {
+    try { state.connections[participant.peerId].close(); } catch (e) {}
+    delete state.connections[participant.peerId];
+  }
+  handleParticipantLeft(userId);
+  showToast(`Removed ${username} from room.`, "info");
+}
+
+function hostForceStopScreenShare(userId) {
+  if (!state.isRoomCreator) return;
+  broadcastToPeers({ type: "force_stop_screenshare", targetUserId: userId });
+  handleScreenShareStop();
+  showToast("Stopped participant's presentation.", "info");
+}
+
+function handleUserRemoved(data) {
+  if (data.targetUserId === state.userId) {
+    showError("You have been removed from the room by the host.");
+    leaveRoom();
+  } else {
+    handleParticipantLeft(data.targetUserId);
+    displaySystemMessage("A participant was removed by the host.");
+  }
+}
+
+function handleForceStopScreenShare(data) {
+  if (data.targetUserId === state.userId) {
+    showToast("The room host stopped your presentation.", "error", 4000);
+    if (state.isGroupVideoPresenter) stopGroupVideo();
+    else stopScreenShare();
+  }
+}
+
+function inviteUser() {
+  const link = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(state.roomId)}`;
+  if (navigator.share) {
+    navigator.share({
+      title: "Join Echo Room",
+      text: `Join my Echo Room with code: ${state.roomId}`,
+      url: link,
+    }).then(() => showToast("Invite link shared!", "success"))
+      .catch(() => copyRoomLinkToClipboard());
+  } else {
+    copyRoomLinkToClipboard();
+  }
 }
 
 // ============================================================
@@ -548,10 +816,9 @@ function sendRoomInfo(conn) {
   conn.send({
     type: "room_info",
     participants: state.participants,
-    screenShareActive: !!state.screenShareStream,
+    screenShareActive: !!state.screenShareStream || !!state.groupVideoStream,
     screenShareUser: state.screenShareUser,
   });
-  broadcastNewParticipant(conn.metadata);
 }
 
 function broadcastNewParticipant(participantData) {
@@ -584,13 +851,56 @@ function addSelfToParticipants() {
 // ============================================================
 function handleIncomingData(conn, data) {
   switch (data.type) {
-    case "room_info":       handleRoomInfo(data, conn); break;
-    case "new_participant": handleNewParticipant(data.participant); break;
-    case "participant_left": handleParticipantLeft(data.userId); break;
-    case "host_update":     handleHostUpdate(data); break;
-    case "chat_message":    displayMessage(data.message); break;
-    case "screen_share_start": handleScreenShareStart(data); break;
-    case "screen_share_stop":  handleScreenShareStop(); break;
+    case "join_request":
+      if (state.isRoomCreator) queueJoinRequest(conn, data);
+      break;
+    case "join_approved":
+      handleJoinApproved(data);
+      break;
+    case "join_rejected":
+      handleJoinRejected(data);
+      break;
+    case "remove_user":
+      handleUserRemoved(data);
+      break;
+    case "force_stop_screenshare":
+      handleForceStopScreenShare(data);
+      break;
+    case "group_video_start":
+      handleGroupVideoStart(data);
+      break;
+    case "group_video_stop":
+      handleGroupVideoStop();
+      break;
+    case "group_video_sync":
+      handleGroupVideoSync(data);
+      break;
+    case "webcam_start":
+      break;
+    case "webcam_stop":
+      removeWebcamTile(data.userId);
+      break;
+    case "room_info":
+      handleRoomInfo(data, conn);
+      break;
+    case "new_participant":
+      handleNewParticipant(data.participant);
+      break;
+    case "participant_left":
+      handleParticipantLeft(data.userId);
+      break;
+    case "host_update":
+      handleHostUpdate(data);
+      break;
+    case "chat_message":
+      displayMessage(data.message);
+      break;
+    case "screen_share_start":
+      handleScreenShareStart(data);
+      break;
+    case "screen_share_stop":
+      handleScreenShareStop();
+      break;
     case "heartbeat":
       conn.send({ type: "heartbeat_ack", timestamp: data.timestamp, received: Date.now() });
       break;
@@ -750,7 +1060,7 @@ function updateParticipantsUI() {
     });
   }
 
-  // Update room info panel participants list
+  // Update room info panel participants list with Host actions
   if (elements.participantsList) {
     elements.participantsList.innerHTML = "";
     participants.forEach((p) => {
@@ -765,14 +1075,49 @@ function updateParticipantsUI() {
       name.textContent = p.username + (p.userId === state.userId ? " (You)" : "");
       li.appendChild(img);
       li.appendChild(name);
+
       if (p.isCreator) {
         const badge = document.createElement("span");
         badge.className = "rip-participant-badge";
         badge.textContent = "Host";
         li.appendChild(badge);
       }
+
+      // Host controls: remove user & stop screen share
+      if (state.isRoomCreator && p.userId !== state.userId) {
+        const actionsDiv = document.createElement("div");
+        actionsDiv.className = "rip-participant-actions";
+
+        if (state.screenShareUserId === p.userId) {
+          const stopShareBtn = document.createElement("button");
+          stopShareBtn.className = "rip-stop-share-btn";
+          stopShareBtn.title = "Stop user screen share";
+          stopShareBtn.innerHTML = '<i class="fas fa-ban"></i>';
+          stopShareBtn.addEventListener("click", () => hostForceStopScreenShare(p.userId));
+          actionsDiv.appendChild(stopShareBtn);
+        }
+
+        const kickBtn = document.createElement("button");
+        kickBtn.className = "rip-kick-btn";
+        kickBtn.title = `Remove ${p.username} from room`;
+        kickBtn.innerHTML = '<i class="fas fa-user-minus"></i>';
+        kickBtn.addEventListener("click", () => hostKickUser(p.userId, p.username));
+        actionsDiv.appendChild(kickBtn);
+
+        li.appendChild(actionsDiv);
+      }
+
       elements.participantsList.appendChild(li);
     });
+  }
+
+  // Update host stop button on active screen share overlay
+  if (elements.hostStopScreenShareBtn) {
+    if (state.isRoomCreator && state.screenShareUserId && state.screenShareUserId !== state.userId) {
+      elements.hostStopScreenShareBtn.classList.remove("hidden");
+    } else {
+      elements.hostStopScreenShareBtn.classList.add("hidden");
+    }
   }
 }
 
@@ -818,61 +1163,43 @@ function closeSidebar() {
 // Movie Mode
 // ============================================================
 function toggleMovieMode() {
-  state.movieMode ? deactivateMovieMode() : activateMovieMode();
+  if (state.movieMode) {
+    deactivateMovieMode();
+  } else {
+    // If no stream is currently active, prompt user to select a video to watch
+    if (!state.screenShareStream && !state.groupVideoStream && !state.screenShareUser) {
+      showToast("Select a video to watch in Movie Mode! 🎬", "info", 3000);
+      openVideoSourceModal();
+      return;
+    }
+    activateMovieMode();
+  }
 }
 
 function activateMovieMode() {
   state.movieMode = true;
-  elements.movieModeBtn.classList.add("movie-active");
-  elements.movieModeBtn.title = "Exit Movie Mode";
-
-  const roomBody = elements.roomBody;
-  const chatSection = document.querySelector(".chat-section");
-  const screenShare = elements.screenShareContainer;
-  const messages = elements.messagesContainer;
-  const msgBar = document.querySelector(".message-bar");
-
-  // Create movie chat panel if not exists
-  let movieChatPanel = document.getElementById("movie-chat-panel-inner");
-  if (!movieChatPanel) {
-    movieChatPanel = document.createElement("div");
-    movieChatPanel.className = "movie-chat-panel";
-    movieChatPanel.id = "movie-chat-panel-inner";
-    chatSection.appendChild(movieChatPanel);
+  if (elements.movieModeBtn) {
+    elements.movieModeBtn.classList.add("movie-active");
+    elements.movieModeBtn.title = "Exit Movie Mode";
   }
 
-  // Move messages and message bar into movie chat panel
-  movieChatPanel.appendChild(messages);
-  movieChatPanel.appendChild(msgBar);
-
-  // Ensure screen share is visible
-  if (screenShare.classList.contains("hidden") && state.screenShareVideo.srcObject) {
-    screenShare.classList.remove("hidden");
+  // Ensure screen share container is visible
+  if (elements.screenShareContainer.classList.contains("hidden")) {
+    elements.screenShareContainer.classList.remove("hidden");
   }
 
-  roomBody.classList.add("movie-mode");
+  elements.roomBody.classList.add("movie-mode");
   showToast("Movie Mode activated 🎬", "info", 2000);
 }
 
 function deactivateMovieMode() {
   state.movieMode = false;
-  elements.movieModeBtn.classList.remove("movie-active");
-  elements.movieModeBtn.title = "Movie Mode";
-
-  const roomBody = elements.roomBody;
-  const chatSection = document.querySelector(".chat-section");
-  const messages = elements.messagesContainer;
-  const msgBar = document.querySelector(".message-bar");
-  const movieChatPanel = document.getElementById("movie-chat-panel-inner");
-
-  // Move messages and bar back into chat section
-  if (movieChatPanel) {
-    chatSection.insertBefore(messages, movieChatPanel);
-    chatSection.insertBefore(msgBar, movieChatPanel);
-    movieChatPanel.remove();
+  if (elements.movieModeBtn) {
+    elements.movieModeBtn.classList.remove("movie-active");
+    elements.movieModeBtn.title = "Movie Mode";
   }
 
-  roomBody.classList.remove("movie-mode");
+  elements.roomBody.classList.remove("movie-mode");
   showToast("Movie Mode deactivated", "info", 2000);
 }
 
@@ -1039,6 +1366,419 @@ function handleScreenShareStop() {
   }
   // Exit movie mode when remote share stops
   if (state.movieMode) deactivateMovieMode();
+  updateParticipantsUI();
+}
+
+// ============================================================
+// Group Video Watching (File or URL)
+// ============================================================
+function openVideoSourceModal() {
+  if (state.screenShareUser && state.screenShareUser !== state.username && !state.isGroupVideoPresenter) {
+    showToast(`${state.screenShareUser} is currently presenting.`, "info");
+    return;
+  }
+  if (elements.videoSourceModal) elements.videoSourceModal.classList.remove("hidden");
+}
+
+function closeVideoSourceModal() {
+  if (elements.videoSourceModal) elements.videoSourceModal.classList.add("hidden");
+}
+
+function handleDeviceVideoSubmit() {
+  const file = elements.videoFileInput?.files?.[0];
+  if (!file) { showError("Please select a video file from your device."); return; }
+  const fileUrl = URL.createObjectURL(file);
+  startGroupVideo(fileUrl, file.name.replace(/\.[^/.]+$/, ""));
+}
+
+function handleUrlVideoSubmit() {
+  const url = elements.videoUrlInput?.value?.trim();
+  if (!url) { showError("Please enter a valid video URL."); return; }
+  startGroupVideo(url, "Online Video");
+}
+
+function extractYouTubeId(url) {
+  if (!url || typeof url !== "string") return null;
+  const regExp = /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/;
+  const match = url.match(regExp);
+  return match ? match[1] : null;
+}
+
+function startGroupVideoFromUrl(url, title) {
+  startGroupVideo(url, title);
+}
+
+function startGroupVideo(src, title) {
+  if (state.screenShareStream) stopScreenShare();
+  closeVideoSourceModal();
+
+  showToast(`Loading "${title}"...`, "info", 2000);
+
+  // Check if it's a YouTube URL
+  const ytId = extractYouTubeId(src);
+
+  // Clean up any old video or iframe player
+  const oldPlayer = document.getElementById("group-video-player");
+  if (oldPlayer) oldPlayer.remove();
+
+  if (ytId) {
+    // ---- YouTube Video Mode ----
+    const iframe = document.createElement("iframe");
+    iframe.id = "group-video-player";
+    iframe.src = `https://www.youtube-nocookie.com/embed/${ytId}?autoplay=1&enablejsapi=1`;
+    iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+    iframe.allowFullscreen = true;
+    iframe.style.width = "100%";
+    iframe.style.height = "100%";
+    iframe.style.minHeight = "45vh";
+    iframe.style.border = "none";
+    iframe.style.display = "block";
+
+    state.groupVideoElement = iframe;
+    state.isGroupVideoPresenter = true;
+    state.screenShareUser = state.username;
+    state.screenShareUserId = state.userId;
+
+    elements.screenShareContainer.classList.remove("hidden");
+    elements.screenShareVideo.classList.add("hidden");
+    elements.screenShareContainer.insertBefore(iframe, elements.screenShareContainer.firstChild);
+
+    elements.screenShareUser.textContent = `You (streaming: ${title || "YouTube"})`;
+    if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fab fa-youtube";
+    elements.stopScreenShareBtn.classList.remove("hidden");
+
+    broadcastToPeers({
+      type: "group_video_start",
+      title: title || "YouTube Video",
+      isYouTube: true,
+      youtubeId: ytId,
+      userId: state.userId,
+      username: state.username,
+    });
+
+    if (!state.movieMode) activateMovieMode();
+    showToast(`Streaming YouTube video to the room! 🎬`, "success");
+    updateParticipantsUI();
+    return;
+  }
+
+  // ---- HTML5 Video Mode (Direct Video URL or Device File) ----
+  const video = document.createElement("video");
+  video.id = "group-video-player";
+  video.controls = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.style.width = "100%";
+  video.style.height = "100%";
+  video.style.objectFit = "contain";
+  video.style.display = "block";
+
+  const isUrl = typeof src === "string" && (src.startsWith("http://") || src.startsWith("https://"));
+  if (isUrl) {
+    // Route through local proxy to bypass CORS restrictions and allow WebRTC captureStream()
+    video.crossOrigin = "anonymous";
+    video.src = `/proxy-video?url=${encodeURIComponent(src)}`;
+  } else {
+    // Local device file (Blob URL)
+    video.src = src;
+  }
+
+  video.onloadedmetadata = () => {
+    video.play().then(() => {
+      let stream = null;
+      try {
+        stream = video.captureStream ? video.captureStream() : video.mozCaptureStream();
+      } catch (e) {
+        console.warn("captureStream error:", e);
+      }
+
+      state.groupVideoStream = stream;
+      state.groupVideoElement = video;
+      state.isGroupVideoPresenter = true;
+      state.screenShareUser = state.username;
+      state.screenShareUserId = state.userId;
+
+      elements.screenShareContainer.classList.remove("hidden");
+      elements.screenShareVideo.classList.add("hidden");
+
+      elements.screenShareContainer.insertBefore(video, elements.screenShareContainer.firstChild);
+
+      elements.screenShareUser.textContent = `You (streaming: ${title})`;
+      if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
+      elements.stopScreenShareBtn.classList.remove("hidden");
+
+      // Broadcast video stream to connected peers via WebRTC call
+      if (stream) {
+        Object.keys(state.connections).forEach((peerId) => {
+          if (state.connections[peerId] && state.connections[peerId].open) {
+            callPeerForGroupVideo(peerId, stream, title);
+          }
+        });
+      }
+
+      // Broadcast video details to peers (peers DO NOT load URL; they receive the WebRTC stream)
+      broadcastToPeers({
+        type: "group_video_start",
+        title,
+        isUrl: false,
+        userId: state.userId,
+        username: state.username,
+      });
+
+      if (!state.movieMode) activateMovieMode();
+      showToast(`Streaming "${title}" to the room! 🎬`, "success");
+      updateParticipantsUI();
+
+      video.onended = () => stopGroupVideo();
+    }).catch((err) => {
+      showError("Could not play video: " + err.message);
+    });
+  };
+
+  video.onerror = () => {
+    // If proxied URL failed, attempt direct load without proxy as fallback
+    if (isUrl && video.src.includes("/proxy-video")) {
+      console.warn("Proxy video load failed, attempting direct load...");
+      video.removeAttribute("crossorigin");
+      video.src = src;
+      return;
+    }
+    showError("Could not play video from this URL. Please verify the URL points to a video file (.mp4, .webm, etc.) or a YouTube video.");
+  };
+}
+
+function callPeerForGroupVideo(peerId, stream, title) {
+  try {
+    const call = state.peer.call(peerId, stream, {
+      metadata: { type: "group_video", title, userId: state.userId, username: state.username }
+    });
+    if (call) state.groupVideoCalls[peerId] = call;
+  } catch (err) {
+    console.error("Error calling peer for group video:", err);
+  }
+}
+
+function stopGroupVideo() {
+  const customPlayer = document.getElementById("group-video-player");
+  if (customPlayer) {
+    if (customPlayer.tagName === "VIDEO") {
+      try {
+        customPlayer.pause();
+        customPlayer.src = "";
+      } catch (e) {}
+    }
+    customPlayer.remove();
+  }
+  state.groupVideoElement = null;
+
+  if (state.groupVideoStream) {
+    state.groupVideoStream.getTracks().forEach((t) => t.stop());
+    state.groupVideoStream = null;
+  }
+
+  Object.values(state.groupVideoCalls).forEach((call) => {
+    try { call.close(); } catch (e) {}
+  });
+  state.groupVideoCalls = {};
+
+  state.isGroupVideoPresenter = false;
+  state.screenShareUser = null;
+  state.screenShareUserId = null;
+
+  elements.screenShareVideo.classList.remove("hidden");
+  elements.screenShareContainer.classList.add("hidden");
+  elements.stopScreenShareBtn.classList.add("hidden");
+  if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
+
+  broadcastToPeers({ type: "group_video_stop", userId: state.userId });
+
+  if (state.movieMode) deactivateMovieMode();
+  updateParticipantsUI();
+}
+
+function handleGroupVideoStart(data) {
+  state.screenShareUser = `${data.username} (streaming: ${data.title})`;
+  state.screenShareUserId = data.userId;
+  elements.screenShareContainer.classList.remove("hidden");
+  elements.screenShareUser.textContent = state.screenShareUser;
+  elements.stopScreenShareBtn.classList.add("hidden");
+
+  // Clean up any old custom player
+  const oldPlayer = document.getElementById("group-video-player");
+  if (oldPlayer) oldPlayer.remove();
+
+  if (data.isYouTube && data.youtubeId) {
+    elements.screenShareVideo.classList.add("hidden");
+    if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fab fa-youtube";
+    const ytFrame = document.createElement("iframe");
+    ytFrame.id = "group-video-player";
+    ytFrame.src = `https://www.youtube-nocookie.com/embed/${data.youtubeId}?autoplay=1`;
+    ytFrame.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+    ytFrame.allowFullscreen = true;
+    ytFrame.style.width = "100%";
+    ytFrame.style.height = "100%";
+    ytFrame.style.minHeight = "45vh";
+    ytFrame.style.border = "none";
+    ytFrame.style.display = "block";
+    elements.screenShareContainer.insertBefore(ytFrame, elements.screenShareContainer.firstChild);
+  } else {
+    // True WebRTC video stream:
+    // Participants display the incoming WebRTC MediaStream in elements.screenShareVideo
+    if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
+    elements.screenShareVideo.classList.remove("hidden");
+  }
+
+  displaySystemMessage(`${data.username} started streaming a video: "${data.title}"`);
+  if (!state.movieMode) activateMovieMode();
+  updateParticipantsUI();
+}
+
+function handleGroupVideoStop() {
+  state.screenShareUser = null;
+  state.screenShareUserId = null;
+  elements.screenShareContainer.classList.add("hidden");
+
+  const customPlayer = document.getElementById("group-video-player");
+  if (customPlayer) customPlayer.remove();
+
+  if (elements.screenShareVideo.srcObject) {
+    elements.screenShareVideo.srcObject.getTracks().forEach((t) => t.stop());
+    elements.screenShareVideo.srcObject = null;
+  }
+  if (elements.screenShareVideo.src) {
+    elements.screenShareVideo.pause();
+    elements.screenShareVideo.removeAttribute("src");
+    elements.screenShareVideo.load();
+  }
+
+  elements.screenShareVideo.classList.remove("hidden");
+  if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
+  if (state.movieMode) deactivateMovieMode();
+  updateParticipantsUI();
+}
+
+function handleGroupVideoSync(data) {
+  if (state.isGroupVideoPresenter) return;
+  const vid = elements.screenShareVideo;
+  if (vid && vid.src && !vid.srcObject) {
+    if (data.action === "seek" && typeof data.time === "number") {
+      if (Math.abs(vid.currentTime - data.time) > 1) {
+        vid.currentTime = data.time;
+      }
+    } else if (data.action === "play") {
+      if (typeof data.time === "number" && Math.abs(vid.currentTime - data.time) > 1) {
+        vid.currentTime = data.time;
+      }
+      vid.play().catch(e => console.log("Sync play:", e));
+    } else if (data.action === "pause") {
+      vid.pause();
+    }
+  }
+}
+
+// ============================================================
+// Webcam Watch Together
+// ============================================================
+async function toggleCamera() {
+  if (state.webcamStream) {
+    // Turn off camera
+    state.webcamStream.getTracks().forEach((t) => t.stop());
+    state.webcamStream = null;
+    removeWebcamTile(state.userId);
+
+    Object.values(state.webcamCalls).forEach((call) => {
+      try { call.close(); } catch (e) {}
+    });
+    state.webcamCalls = {};
+
+    broadcastToPeers({ type: "webcam_stop", userId: state.userId });
+
+    if (elements.toggleCameraBtn) {
+      elements.toggleCameraBtn.classList.remove("active-action");
+      elements.toggleCameraBtn.title = "Toggle Camera";
+    }
+    showToast("Camera turned off", "info");
+  } else {
+    // Turn on camera
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 320 }, height: { ideal: 240 } },
+        audio: false,
+      });
+      state.webcamStream = stream;
+
+      addWebcamTile(state.userId, "You (Camera)", stream, true);
+
+      // Call peers with webcam stream
+      Object.keys(state.connections).forEach((peerId) => {
+        if (state.connections[peerId] && state.connections[peerId].open) {
+          callPeerForWebcam(peerId, stream);
+        }
+      });
+
+      broadcastToPeers({ type: "webcam_start", userId: state.userId, username: state.username });
+
+      if (elements.toggleCameraBtn) {
+        elements.toggleCameraBtn.classList.add("active-action");
+        elements.toggleCameraBtn.title = "Turn Camera Off";
+      }
+      showToast("Camera active! Watching together 🎥", "success");
+    } catch (err) {
+      console.error("Camera access error:", err);
+      showError("Could not access camera: " + err.message);
+    }
+  }
+}
+
+function callPeerForWebcam(peerId, stream) {
+  try {
+    const call = state.peer.call(peerId, stream, {
+      metadata: { type: "webcam", userId: state.userId, username: state.username }
+    });
+    if (call) state.webcamCalls[peerId] = call;
+  } catch (err) {
+    console.error("Error calling peer for webcam:", err);
+  }
+}
+
+function addWebcamTile(userId, username, stream, isLocal = false) {
+  if (!elements.webcamGrid) return;
+
+  let tile = document.getElementById(`webcam-tile-${userId}`);
+  if (tile) {
+    const v = tile.querySelector("video");
+    if (v) v.srcObject = stream;
+    return;
+  }
+
+  tile = document.createElement("div");
+  tile.className = "webcam-tile" + (isLocal ? " local-tile" : "");
+  tile.id = `webcam-tile-${userId}`;
+
+  const vid = document.createElement("video");
+  vid.autoplay = true;
+  vid.playsInline = true;
+  vid.muted = isLocal;
+  vid.srcObject = stream;
+
+  const nameSpan = document.createElement("div");
+  nameSpan.className = "webcam-name";
+  nameSpan.textContent = username;
+
+  tile.appendChild(vid);
+  tile.appendChild(nameSpan);
+  elements.webcamGrid.appendChild(tile);
+}
+
+function removeWebcamTile(userId) {
+  const tile = document.getElementById(`webcam-tile-${userId}`);
+  if (tile) {
+    const v = tile.querySelector("video");
+    if (v && v.srcObject) {
+      try { v.srcObject.getTracks().forEach((t) => t.stop()); } catch (e) {}
+    }
+    tile.remove();
+  }
 }
 
 // ============================================================
@@ -1120,8 +1860,15 @@ function displayConnectionStatus(status, details = "") {
 // Leave / Reset Room
 // ============================================================
 function leaveRoom() {
+  if (state.isGroupVideoPresenter) stopGroupVideo();
   if (state.screenShareStream) stopScreenShare();
+  if (state.webcamStream) toggleCamera();
   if (state.movieMode) deactivateMovieMode();
+
+  if (elements.videoSourceModal) elements.videoSourceModal.classList.add("hidden");
+  if (elements.joinRequestModal) elements.joinRequestModal.classList.add("hidden");
+  if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+
   elements.messagesContainer.innerHTML = "";
   resetParticipantsUI();
   elements.chatRoom.classList.add("hidden");
@@ -1143,6 +1890,8 @@ function leaveRoom() {
     state.roomId = null;
     state.connections = {};
     state.participants = {};
+    state.pendingJoinRequests = {};
+    state.isJoinApproved = false;
     state.isRoomCreator = false;
     state.connectionStatus = "disconnected";
     state.hostClaimRetries = 0;
@@ -1186,11 +1935,20 @@ function retryConnection() {
 }
 
 function resetRoom() {
+  if (state.isGroupVideoPresenter) stopGroupVideo();
+  if (state.webcamStream) toggleCamera();
   if (state.peer) { try { state.peer.destroy(); } catch (e) {} }
+
+  if (elements.videoSourceModal) elements.videoSourceModal.classList.add("hidden");
+  if (elements.joinRequestModal) elements.joinRequestModal.classList.add("hidden");
+  if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+
   state.peer = null;
   state.peerId = null;
   state.connections = {};
   state.participants = {};
+  state.pendingJoinRequests = {};
+  state.isJoinApproved = false;
   state.isRoomCreator = false;
   state.connectionStatus = "disconnected";
   elements.chatRoom.classList.add("hidden");

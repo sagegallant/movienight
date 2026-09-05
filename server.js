@@ -6,6 +6,7 @@ try {
 }
 
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const PORT = process.env.PORT || 3000;
@@ -56,6 +57,11 @@ const server = http.createServer((req, res) => {
   } catch (e) {
     res.writeHead(400, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" });
     return res.end("Bad Request");
+  }
+
+  // Handle video streaming proxy endpoint for WebRTC group watching
+  if (reqUrl.pathname === "/proxy-video") {
+    return handleVideoProxy(req, res, reqUrl);
   }
 
   let pathname = decodeURIComponent(reqUrl.pathname);
@@ -117,3 +123,90 @@ server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}/`);
   console.log("Press Ctrl+C to stop the server");
 });
+
+// Proxy handler for external video URLs so they can be captured via WebRTC captureStream()
+function handleVideoProxy(req, res, reqUrl) {
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+      "Access-Control-Allow-Headers": "Range, Content-Type, Accept",
+    });
+    return res.end();
+  }
+
+  const targetUrl = reqUrl.searchParams.get("url");
+  if (!targetUrl) {
+    res.writeHead(400, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" });
+    return res.end("Missing 'url' query parameter");
+  }
+
+  function fetchProxy(urlStr, redirectCount = 0) {
+    if (redirectCount > 5) {
+      res.writeHead(508, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" });
+      return res.end("Too many redirects");
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(urlStr);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("Invalid protocol");
+      }
+    } catch (err) {
+      res.writeHead(400, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" });
+      return res.end("Invalid target URL");
+    }
+
+    const client = parsed.protocol === "https:" ? https : http;
+    const reqHeaders = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "*/*",
+    };
+    if (req.headers["range"]) {
+      reqHeaders["range"] = req.headers["range"];
+    }
+
+    const proxyReq = client.get(parsed, { headers: reqHeaders }, (proxyRes) => {
+      // Follow redirects (301, 302, 307, 308)
+      if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
+        const nextUrl = new URL(proxyRes.headers.location, parsed).href;
+        return fetchProxy(nextUrl, redirectCount + 1);
+      }
+
+      const resHeaders = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        "Access-Control-Allow-Headers": "Range, Content-Type, Accept",
+        "Content-Type": proxyRes.headers["content-type"] || "video/mp4",
+      };
+      if (proxyRes.headers["content-length"]) {
+        resHeaders["Content-Length"] = proxyRes.headers["content-length"];
+      }
+      if (proxyRes.headers["content-range"]) {
+        resHeaders["Content-Range"] = proxyRes.headers["content-range"];
+      }
+      if (proxyRes.headers["accept-ranges"]) {
+        resHeaders["Accept-Ranges"] = proxyRes.headers["accept-ranges"];
+      }
+
+      res.writeHead(proxyRes.statusCode, resHeaders);
+      proxyRes.pipe(res);
+    });
+
+    proxyReq.on("error", (err) => {
+      console.error("Proxy video error:", err.message);
+      if (!res.headersSent) {
+        res.writeHead(502, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" });
+        res.end("Video proxy error: " + err.message);
+      }
+    });
+
+    req.on("close", () => {
+      proxyReq.destroy();
+    });
+  }
+
+  fetchProxy(targetUrl);
+}
+

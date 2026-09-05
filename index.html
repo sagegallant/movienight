@@ -113,17 +113,17 @@
                 </button>
             </div>
             <div class="room-header-right room-actions">
+                <button id="group-video-btn" class="icon-btn room-action-btn" title="Watch Video Together">
+                    <i class="fas fa-play-circle"></i>
+                </button>
+                <button id="toggle-camera-btn" class="icon-btn room-action-btn" title="Toggle Camera">
+                    <i class="fas fa-video"></i>
+                </button>
                 <button id="share-screen-btn" class="icon-btn room-action-btn" title="Share Screen">
                     <i class="fas fa-desktop"></i>
                 </button>
-                <button id="movie-mode-btn" class="icon-btn room-action-btn" title="Movie Mode" id="movie-mode-btn">
+                <button id="movie-mode-btn" class="icon-btn room-action-btn" title="Movie Mode">
                     <i class="fas fa-film"></i>
-                </button>
-                <button id="copy-room-link-btn" class="icon-btn room-action-btn" title="Copy Invite Link">
-                    <i class="fas fa-link"></i>
-                </button>
-                <button id="copy-room-id" class="icon-btn room-action-btn" title="Copy Room ID">
-                    <i class="fas fa-copy"></i>
                 </button>
                 <button id="theme-toggle-room" class="icon-btn room-action-btn" title="Toggle theme">
                     <i class="fas fa-moon"></i>
@@ -144,6 +144,11 @@
                 <span class="rip-label">Room ID</span>
                 <span id="rip-room-id" class="rip-code">——</span>
                 <button id="rip-copy-id" class="icon-btn-sm" title="Copy ID"><i class="fas fa-copy"></i></button>
+            </div>
+            <div class="rip-invite-box">
+                <button id="rip-invite-btn" class="rip-invite-btn" title="Copy invitation link">
+                    <i class="fas fa-user-plus"></i> Invite / Add Person
+                </button>
             </div>
             <div class="rip-participants-label">Participants</div>
             <ul id="participants-list" class="rip-participants"></ul>
@@ -166,39 +171,119 @@
 
             <!-- Chat Section -->
             <section class="chat-section">
-                <!-- Screen share container (hidden unless sharing) -->
+                <!-- Screen share / Video watching container -->
                 <div id="screen-share-container" class="screen-share-container hidden">
                     <video id="screen-share-video" autoplay playsinline></video>
+                    
+                    <!-- Webcam overlay grid for watching together -->
+                    <div id="webcam-grid" class="webcam-grid"></div>
+
                     <div class="screen-share-overlay">
                         <span class="screen-share-badge">
-                            <i class="fas fa-desktop"></i>
+                            <i id="stream-type-icon" class="fas fa-desktop"></i>
                             <span id="screen-share-user">Someone</span> is sharing
                         </span>
-                        <button id="stop-screen-share" class="stop-share-btn hidden">
-                            <i class="fas fa-stop-circle"></i> Stop Sharing
+                        <div class="screen-share-actions">
+                            <button id="stop-screen-share" class="stop-share-btn hidden">
+                                <i class="fas fa-stop-circle"></i> Stop Sharing
+                            </button>
+                            <button id="host-stop-screen-share" class="stop-share-btn host-stop-btn hidden" title="Host can stop presenter stream">
+                                <i class="fas fa-ban"></i> Stop User Share (Host)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-main" id="chat-main">
+                    <!-- Messages -->
+                    <div id="messages-container" class="messages-container"></div>
+
+                    <!-- Message input -->
+                    <div class="message-bar">
+                        <input type="text" id="message-input" class="message-input-field" placeholder="Type a message…">
+                        <button id="send-message-btn" class="send-btn" title="Send message">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- ========== MODALS ========== -->
+
+    <!-- Video Source Selector Modal -->
+    <div id="video-source-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fas fa-film modal-icon"></i> Watch Video Together</div>
+                <button id="close-video-modal" class="icon-btn-sm"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">Play a video from your computer or enter a URL. The video will be streamed in sync to everyone in the room!</p>
+                
+                <div class="video-option-block">
+                    <label class="modal-label"><i class="fas fa-file-video"></i> Play from Device</label>
+                    <input type="file" id="video-file-input" accept="video/mp4,video/webm,video/ogg,video/*" class="file-input-field">
+                    <button id="play-device-video-btn" class="btn-primary" style="margin-top: 8px;">
+                        <i class="fas fa-play"></i> Stream Selected File
+                    </button>
+                </div>
+
+                <div class="divider"><span>OR</span></div>
+
+                <div class="video-option-block">
+                    <label class="modal-label"><i class="fas fa-globe"></i> Play from URL</label>
+                    <div class="url-input-wrap">
+                        <input type="url" id="video-url-input" class="field-input" placeholder="https://example.com/video.mp4">
+                        <button id="play-url-video-btn" class="btn-secondary">
+                            <i class="fas fa-play"></i> Stream
                         </button>
                     </div>
                 </div>
 
-                <!-- Messages -->
-                <div id="messages-container" class="messages-container"></div>
-
-                <!-- Message input -->
-                <div class="message-bar">
-                    <button id="toggle-sidebar-btn" class="icon-btn sidebar-toggle-btn" title="Toggle participants">
-                        <i class="fas fa-users"></i>
-                    </button>
-                    <input type="text" id="message-input" class="message-input-field" placeholder="Type a message…">
-                    <button id="send-message-btn" class="send-btn">
-                        <i class="fas fa-paper-plane"></i>
-                    </button>
+                <div class="quick-samples">
+                    <span class="sample-label">Quick sample test:</span>
+                    <button type="button" class="sample-btn" data-url="https://www.w3schools.com/html/mov_bbb.mp4">Big Buck Bunny (MP4)</button>
+                    <button type="button" class="sample-btn" data-url="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4">Blooming Flowers (MP4)</button>
                 </div>
-            </section>
-
-            <!-- Movie Mode Side Panel (video + chat side-by-side) -->
-            <div id="movie-panel" class="movie-panel hidden">
-                <!-- reuses #screen-share-container in movie mode via JS -->
             </div>
+        </div>
+    </div>
+
+    <!-- Host Join Request Approval Modal -->
+    <div id="join-request-modal" class="modal-overlay hidden">
+        <div class="modal-card approval-card">
+            <div class="approval-header">
+                <div class="approval-badge"><i class="fas fa-shield-alt"></i> Host Approval Required</div>
+            </div>
+            <div class="approval-user-info">
+                <img id="approval-user-avatar" class="approval-avatar" src="" alt="User">
+                <div class="approval-details">
+                    <h3 id="approval-user-name">User Name</h3>
+                    <p>wants to join this room</p>
+                </div>
+            </div>
+            <div class="approval-actions">
+                <button id="approve-join-btn" class="btn-approve">
+                    <i class="fas fa-check"></i> Approve
+                </button>
+                <button id="deny-join-btn" class="btn-deny">
+                    <i class="fas fa-times"></i> Deny
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Joiner Waiting for Approval Modal -->
+    <div id="join-waiting-modal" class="modal-overlay hidden">
+        <div class="modal-card waiting-card">
+            <div class="waiting-spinner-wrap">
+                <div class="waiting-spinner"></div>
+            </div>
+            <h3 class="waiting-title">Waiting for Host Approval</h3>
+            <p class="waiting-desc">The room host has been notified of your request to join. Please wait a moment...</p>
+            <button id="cancel-join-request-btn" class="btn-secondary">Cancel Request</button>
         </div>
     </div>
 
