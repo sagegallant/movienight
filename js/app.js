@@ -99,6 +99,7 @@ const elements = {
   streamTypeIcon:       document.getElementById("stream-type-icon"),
   stopScreenShareBtn:   document.getElementById("stop-screen-share"),
   hostStopScreenShareBtn: document.getElementById("host-stop-screen-share"),
+  unmuteStreamBtn:      document.getElementById("unmute-stream-btn"),
   webcamGrid:           document.getElementById("webcam-grid"),
 
   // Video source modal
@@ -171,6 +172,15 @@ function setupEventListeners() {
   if (elements.hostStopScreenShareBtn) {
     elements.hostStopScreenShareBtn.addEventListener("click", () => {
       if (state.screenShareUserId) hostForceStopScreenShare(state.screenShareUserId);
+    });
+  }
+  if (elements.unmuteStreamBtn) {
+    elements.unmuteStreamBtn.addEventListener("click", () => {
+      if (elements.screenShareVideo) {
+        elements.screenShareVideo.muted = false;
+      }
+      elements.unmuteStreamBtn.classList.add("hidden");
+      showToast("Sound unmuted 🔊", "success");
     });
   }
   if (elements.copyRoomIdBtn) {
@@ -445,6 +455,73 @@ async function joinRoom(targetRoomId = null) {
   initializePeer();
 }
 
+// Helper to get all remote peer IDs in room
+function getRemotePeerIds() {
+  const peerIds = new Set();
+  if (state.participants) {
+    Object.values(state.participants).forEach((p) => {
+      if (p && p.peerId && p.peerId !== state.peerId) peerIds.add(p.peerId);
+    });
+  }
+  if (state.connections) {
+    Object.keys(state.connections).forEach((pid) => {
+      if (pid && pid !== state.peerId) peerIds.add(pid);
+    });
+  }
+  return Array.from(peerIds);
+}
+
+// Handle attaching incoming screen share / group video stream
+function attachIncomingMediaStream(remoteStream, metadata) {
+  if (!remoteStream) return;
+  console.log("Attaching incoming media stream:", metadata);
+  const isGroupVideo = metadata && metadata.type === "group_video";
+  const username = metadata?.username || "Participant";
+  const title = metadata?.title || "Video";
+
+  state.screenShareUser = isGroupVideo ? `${username} (streaming: ${title})` : username;
+  state.screenShareUserId = metadata?.userId || null;
+
+  elements.screenShareContainer.classList.remove("hidden");
+  elements.screenShareVideo.classList.remove("hidden");
+  elements.screenShareUser.textContent = state.screenShareUser;
+  if (elements.streamTypeIcon) {
+    elements.streamTypeIcon.className = isGroupVideo ? "fas fa-film" : "fas fa-desktop";
+  }
+  elements.stopScreenShareBtn.classList.add("hidden");
+
+  // Remove any custom iframe/element that might be lingering
+  const customPlayer = document.getElementById("group-video-player");
+  if (customPlayer) customPlayer.remove();
+
+  if (elements.screenShareVideo.srcObject !== remoteStream) {
+    elements.screenShareVideo.srcObject = remoteStream;
+  }
+
+  if (isGroupVideo) {
+    elements.screenShareVideo.muted = false;
+    const playPromise = elements.screenShareVideo.play();
+    if (playPromise !== undefined) {
+      playPromise.catch((err) => {
+        console.warn("Unmuted autoplay restricted by browser policy. Falling back to muted with button:", err);
+        elements.screenShareVideo.muted = true;
+        elements.screenShareVideo.play().catch((e) => console.error("Muted playback error:", e));
+        if (elements.unmuteStreamBtn) elements.unmuteStreamBtn.classList.remove("hidden");
+      });
+    }
+  } else {
+    // Screen sharing is always muted so it autoplays instantly without browser autoplay blocks
+    elements.screenShareVideo.muted = true;
+    const playPromise = elements.screenShareVideo.play();
+    if (playPromise !== undefined) {
+      playPromise.catch((err) => console.warn("Screen share play error:", err));
+    }
+  }
+
+  if (!state.movieMode) activateMovieMode();
+  updateParticipantsUI();
+}
+
 // ============================================================
 // PeerJS Init
 // ============================================================
@@ -493,52 +570,47 @@ function initializePeer(peerId) {
     // Handle incoming media calls (screen share, group video, webcam)
     state.peer.on("call", (call) => {
       console.log("Incoming media call from:", call.peer, call.metadata);
-      if (call.metadata && call.metadata.type === "screen_share") {
+      if (call.metadata && (call.metadata.type === "screen_share" || call.metadata.type === "group_video")) {
         call.answer();
-        call.on("stream", (remoteStream) => {
-          console.log("Received remote screen share stream");
-          state.screenShareUser = call.metadata?.username || "Participant";
-          state.screenShareUserId = call.metadata?.userId || null;
-          elements.screenShareContainer.classList.remove("hidden");
-          elements.screenShareVideo.classList.remove("hidden");
-          elements.screenShareVideo.srcObject = remoteStream;
-          elements.screenShareUser.textContent = state.screenShareUser;
-          if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
-          elements.stopScreenShareBtn.classList.add("hidden");
-          if (!state.movieMode) activateMovieMode();
-          updateParticipantsUI();
-        });
-        call.on("close", () => handleScreenShareStop());
-        call.on("error", (err) => { console.error("Screen share call error:", err); handleScreenShareStop(); });
-      } else if (call.metadata && call.metadata.type === "group_video") {
-        call.answer();
-        call.on("stream", (remoteStream) => {
-          console.log("Received remote group video stream");
-          state.screenShareUser = `${call.metadata?.username || "Host"} (streaming: ${call.metadata?.title || "Video"})`;
-          state.screenShareUserId = call.metadata?.userId || null;
-          elements.screenShareContainer.classList.remove("hidden");
-          elements.screenShareVideo.classList.remove("hidden");
-          if (elements.screenShareVideo.src) {
-            elements.screenShareVideo.removeAttribute("src");
-            elements.screenShareVideo.load();
+
+        const onStream = (remoteStream) => {
+          if (remoteStream) {
+            console.log("Received remote media stream:", call.metadata?.type);
+            attachIncomingMediaStream(remoteStream, call.metadata);
           }
-          elements.screenShareVideo.srcObject = remoteStream;
-          elements.screenShareVideo.play().catch(e => console.log("Stream play error:", e));
-          elements.screenShareUser.textContent = state.screenShareUser;
-          if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
-          elements.stopScreenShareBtn.classList.add("hidden");
-          if (!state.movieMode) activateMovieMode();
-          showToast(`${call.metadata?.username || "Host"} started streaming a video! 🎬`, "info");
-          updateParticipantsUI();
+        };
+
+        call.on("stream", onStream);
+
+        // RTCPeerConnection track event as fallback/immediate listener
+        if (call.peerConnection) {
+          call.peerConnection.addEventListener("track", (evt) => {
+            const stream = (evt.streams && evt.streams[0]) ? evt.streams[0] : new MediaStream([evt.track]);
+            onStream(stream);
+          });
+        }
+
+        call.on("close", () => {
+          if (call.metadata.type === "group_video") handleGroupVideoStop();
+          else handleScreenShareStop();
         });
-        call.on("close", () => handleGroupVideoStop());
-        call.on("error", (err) => { console.error("Group video call error:", err); handleGroupVideoStop(); });
+        call.on("error", (err) => {
+          console.error("Media call error:", err);
+          if (call.metadata.type === "group_video") handleGroupVideoStop();
+          else handleScreenShareStop();
+        });
       } else if (call.metadata && call.metadata.type === "webcam") {
         call.answer();
         call.on("stream", (remoteStream) => {
           console.log("Received remote webcam stream from:", call.metadata?.username);
           addWebcamTile(call.metadata?.userId, call.metadata?.username || "User", remoteStream, false);
         });
+        if (call.peerConnection) {
+          call.peerConnection.addEventListener("track", (evt) => {
+            const stream = (evt.streams && evt.streams[0]) ? evt.streams[0] : new MediaStream([evt.track]);
+            addWebcamTile(call.metadata?.userId, call.metadata?.username || "User", stream, false);
+          });
+        }
         call.on("close", () => {
           if (call.metadata?.userId) removeWebcamTile(call.metadata.userId);
         });
@@ -713,6 +785,13 @@ function handleApproveJoin() {
   setTimeout(() => {
     sendRoomInfo(conn);
     broadcastNewParticipant(metadata);
+
+    // If host is presenting, initiate media call to the approved peer
+    if (state.screenShareStream) {
+      setTimeout(() => callPeerForScreenShare(peerId, state.screenShareStream), 600);
+    } else if (state.groupVideoStream) {
+      setTimeout(() => callPeerForGroupVideo(peerId, state.groupVideoStream, state.screenShareUser || "Video"), 600);
+    }
   }, 200);
 
   showToast(`Approved ${metadata.username}!`, "success");
@@ -917,6 +996,17 @@ function handleRoomInfo(data, conn) {
     };
     conn.send({ type: "new_participant", participant: state.participants[state.userId] });
   }
+
+  // Connect data connections to other participants in the mesh
+  Object.values(state.participants).forEach((p) => {
+    if (p.peerId && p.peerId !== state.peerId && !state.connections[p.peerId]) {
+      const peerConn = state.peer.connect(p.peerId, {
+        metadata: { userId: state.userId, username: state.username, avatar: state.avatar, joinRequest: false }
+      });
+      handlePeerConnection(peerConn);
+    }
+  });
+
   updateParticipantsUI();
 }
 
@@ -929,6 +1019,16 @@ function handleNewParticipant(participant) {
       });
       handlePeerConnection(conn);
     }
+
+    // If we are currently presenting a screen share or group video, stream to this new participant
+    if (participant.peerId && participant.peerId !== state.peerId) {
+      if (state.screenShareStream) {
+        setTimeout(() => callPeerForScreenShare(participant.peerId, state.screenShareStream), 800);
+      } else if (state.groupVideoStream) {
+        setTimeout(() => callPeerForGroupVideo(participant.peerId, state.groupVideoStream, state.screenShareUser || "Video"), 800);
+      }
+    }
+
     updateParticipantsUI();
     displaySystemMessage(`${participant.username} joined the room`);
   }
@@ -1291,14 +1391,22 @@ async function startScreenShare() {
     state.screenShareUserId = state.userId;
 
     elements.screenShareContainer.classList.remove("hidden");
+    elements.screenShareVideo.classList.remove("hidden");
+    elements.screenShareVideo.muted = true;
     elements.screenShareVideo.srcObject = stream;
+    const playPromise = elements.screenShareVideo.play();
+    if (playPromise !== undefined) {
+      playPromise.catch((e) => console.warn("Presenter preview play:", e));
+    }
     elements.screenShareUser.textContent = "You";
+    if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
     elements.stopScreenShareBtn.classList.remove("hidden");
 
-    Object.keys(state.connections).forEach((peerId) => {
-      if (state.connections[peerId] && state.connections[peerId].open) {
-        callPeerForScreenShare(peerId, stream);
-      }
+    // Call all remote peers in the room
+    const peerIds = getRemotePeerIds();
+    console.log("Calling remote peers for screen share:", peerIds);
+    peerIds.forEach((peerId) => {
+      callPeerForScreenShare(peerId, stream);
     });
 
     stream.getVideoTracks()[0].addEventListener("ended", () => stopScreenShare());
@@ -1307,6 +1415,8 @@ async function startScreenShare() {
 
     // Auto-activate movie mode for presenter
     if (!state.movieMode) activateMovieMode();
+    showToast("Screen sharing started! 🖥️", "success");
+    updateParticipantsUI();
   } catch (err) {
     console.error("Error starting screen share:", err);
     if (err.name !== "NotAllowedError") showError("Could not start screen sharing: " + err.message);
@@ -1328,9 +1438,13 @@ function handleScreenShareStart(data) {
   state.screenShareUser = data.username;
   state.screenShareUserId = data.userId;
   elements.screenShareContainer.classList.remove("hidden");
+  elements.screenShareVideo.classList.remove("hidden");
   elements.screenShareUser.textContent = data.username;
+  if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
   elements.stopScreenShareBtn.classList.add("hidden");
   displaySystemMessage(`${data.username} is sharing their screen`);
+  if (!state.movieMode) activateMovieMode();
+  updateParticipantsUI();
 }
 
 function stopScreenShare() {
@@ -1484,10 +1598,14 @@ function startGroupVideo(src, title) {
   }
 
   video.onloadedmetadata = () => {
-    video.play().then(() => {
+    const onReadyToStream = () => {
       let stream = null;
       try {
-        stream = video.captureStream ? video.captureStream() : video.mozCaptureStream();
+        if (typeof video.captureStream === "function") {
+          stream = video.captureStream(30);
+        } else if (typeof video.mozCaptureStream === "function") {
+          stream = video.mozCaptureStream(30);
+        }
       } catch (e) {
         console.warn("captureStream error:", e);
       }
@@ -1509,14 +1627,14 @@ function startGroupVideo(src, title) {
 
       // Broadcast video stream to connected peers via WebRTC call
       if (stream) {
-        Object.keys(state.connections).forEach((peerId) => {
-          if (state.connections[peerId] && state.connections[peerId].open) {
-            callPeerForGroupVideo(peerId, stream, title);
-          }
+        const peerIds = getRemotePeerIds();
+        console.log("Calling remote peers for group video stream:", peerIds);
+        peerIds.forEach((peerId) => {
+          callPeerForGroupVideo(peerId, stream, title);
         });
       }
 
-      // Broadcast video details to peers (peers DO NOT load URL; they receive the WebRTC stream)
+      // Broadcast video details to peers (peers receive the WebRTC stream)
       broadcastToPeers({
         type: "group_video_start",
         title,
@@ -1530,9 +1648,20 @@ function startGroupVideo(src, title) {
       updateParticipantsUI();
 
       video.onended = () => stopGroupVideo();
-    }).catch((err) => {
-      showError("Could not play video: " + err.message);
-    });
+    };
+
+    const playPromise = video.play();
+    if (playPromise !== undefined) {
+      playPromise.then(onReadyToStream).catch((err) => {
+        console.warn("Video unmuted play failed, muting and retrying:", err);
+        video.muted = true;
+        video.play().then(onReadyToStream).catch((e) => {
+          showError("Could not play video: " + e.message);
+        });
+      });
+    } else {
+      onReadyToStream();
+    }
   };
 
   video.onerror = () => {
@@ -1709,11 +1838,10 @@ async function toggleCamera() {
 
       addWebcamTile(state.userId, "You (Camera)", stream, true);
 
-      // Call peers with webcam stream
-      Object.keys(state.connections).forEach((peerId) => {
-        if (state.connections[peerId] && state.connections[peerId].open) {
-          callPeerForWebcam(peerId, stream);
-        }
+      // Call all remote peers with webcam stream
+      const peerIds = getRemotePeerIds();
+      peerIds.forEach((peerId) => {
+        callPeerForWebcam(peerId, stream);
       });
 
       broadcastToPeers({ type: "webcam_start", userId: state.userId, username: state.username });
