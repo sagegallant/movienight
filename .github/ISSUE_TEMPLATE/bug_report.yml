@@ -1,0 +1,83 @@
+name: 🐛 Bug Report
+description: Report a reproducible bug or issue encountered while streaming or joining a room.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue! Please provide as much detail as possible to help us reproduce and resolve it quickly.
+
+  - type: dropdown
+    id: streaming-mode
+    attributes:
+      label: Streaming Mode
+      description: Which streaming pipeline were you using when the issue occurred?
+      options:
+        - "Local File (MP4, MKV, WEBM)"
+        - "Direct Video URL / CDN Stream"
+        - "YouTube Embed Sync"
+        - "Screen / Window Sharing"
+        - "Webcam & Microphone Chat"
+        - "Room Connection / Knock & Admission"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what the bug is.
+      placeholder: What went wrong?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Detailed steps to reproduce the behavior.
+      placeholder: |
+        1. Open MovieNight and create a room.
+        2. Stream a video from ...
+        3. Join from a second participant tab.
+        4. See error ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs Actual Behavior
+      description: What did you expect to happen vs what actually occurred?
+      placeholder: Expected playback to stay in sync, but participant lagged by 5 seconds...
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment & Browser
+      description: Browser version and Operating System.
+      placeholder: e.g. Chrome 124 on Windows 11 / Firefox 125 on macOS Sonoma
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Browser Console Logs
+      description: Open Developer Tools (F12) -> Console and paste any red error logs or WebRTC warnings.
+      render: shell
+      placeholder: Paste console error messages here...
+
+  - type: checkboxes
+    id: checkboxes
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have verified that this issue has not already been reported in existing Issues.
+          required: true
+        - label: I am running the latest version from the `main` branch or GitHub Pages.
+          required: true
