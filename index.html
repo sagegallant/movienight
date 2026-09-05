@@ -100,15 +100,10 @@
         <!-- Top Bar -->
         <header class="room-header">
             <div class="room-header-left">
-                <div class="brand brand-sm">
+                <!-- Brand icon opens room info panel (replaces separate room-info-btn) -->
+                <button id="room-info-btn" class="brand-info-btn" title="Room info &amp; participants">
                     <div class="brand-icon brand-icon-sm"><i class="fas fa-headphones-alt"></i></div>
-                    <span class="brand-name">Echo</span>
-                </div>
-            </div>
-            <div class="room-header-center">
-                <!-- Room info trigger replaces raw room ID text -->
-                <button id="room-info-btn" class="room-info-trigger" title="Room info & participants">
-                    <i class="fas fa-users"></i>
+                    <span class="brand-name-room">Echo</span>
                     <span id="participant-count" class="participant-badge">1</span>
                 </button>
             </div>
@@ -175,7 +170,7 @@
                 <div id="screen-share-container" class="screen-share-container hidden">
                     <video id="screen-share-video" autoplay playsinline></video>
                     
-                    <!-- Webcam overlay grid for watching together -->
+                    <!-- Webcam row for watching together -->
                     <div id="webcam-grid" class="webcam-grid"></div>
 
                     <div class="screen-share-overlay">
@@ -184,9 +179,6 @@
                             <span id="screen-share-user">Someone</span> is sharing
                         </span>
                         <div class="screen-share-actions">
-                            <button id="unmute-stream-btn" class="stop-share-btn hidden" title="Unmute video sound" style="background: rgba(99,102,241,0.9);">
-                                <i class="fas fa-volume-up"></i> Unmute
-                            </button>
                             <button id="stop-screen-share" class="stop-share-btn hidden">
                                 <i class="fas fa-stop-circle"></i> Stop Sharing
                             </button>
@@ -195,21 +187,70 @@
                             </button>
                         </div>
                     </div>
-                </div>
 
-                <div class="chat-main" id="chat-main">
-                    <!-- Messages -->
-                    <div id="messages-container" class="messages-container"></div>
-
-                    <!-- Message input -->
-                    <div class="message-bar">
-                        <input type="text" id="message-input" class="message-input-field" placeholder="Type a message…">
-                        <button id="send-message-btn" class="send-btn" title="Send message">
-                            <i class="fas fa-paper-plane"></i>
-                        </button>
+                    <!-- Quality selector for viewers (non-streaming participants only) -->
+                    <div id="quality-control" class="quality-control hidden">
+                        <i class="fas fa-sliders-h quality-icon"></i>
+                        <select id="quality-select" class="quality-select">
+                            <option value="auto">Auto</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
+                            <option value="low">Low</option>
+                        </select>
                     </div>
                 </div>
+
+                <!-- Movie Mode Control Bar (only visible in movie mode) -->
+                <div id="movie-controls-bar" class="movie-controls-bar hidden">
+                    <div class="mm-controls-inner">
+                        <button id="mm-cam-btn" class="mm-ctrl-btn" title="Toggle Camera">
+                            <i class="fas fa-video"></i>
+                            <span>Cam</span>
+                        </button>
+                        <button id="mm-mic-btn" class="mm-ctrl-btn" title="Toggle Microphone">
+                            <i class="fas fa-microphone"></i>
+                            <span>Mic</span>
+                        </button>
+                        <button id="mm-share-btn" class="mm-ctrl-btn" title="Share Screen">
+                            <i class="fas fa-desktop"></i>
+                            <span>Share</span>
+                        </button>
+                        <button id="mm-react-btn" class="mm-ctrl-btn" title="React">
+                            <i class="fas fa-smile"></i>
+                            <span>React</span>
+                        </button>
+                        <button id="mm-leave-btn" class="mm-ctrl-btn mm-ctrl-danger" title="Leave Room">
+                            <i class="fas fa-phone-slash"></i>
+                            <span>Leave</span>
+                        </button>
+                    </div>
+                    <!-- Emoji reaction picker -->
+                    <div id="reaction-picker" class="reaction-picker hidden">
+                        <button class="reaction-btn" data-emoji="👍">👍</button>
+                        <button class="reaction-btn" data-emoji="❤️">❤️</button>
+                        <button class="reaction-btn" data-emoji="😂">😂</button>
+                        <button class="reaction-btn" data-emoji="😮">😮</button>
+                        <button class="reaction-btn" data-emoji="🎉">🎉</button>
+                        <button class="reaction-btn" data-emoji="🔥">🔥</button>
+                        <button class="reaction-btn" data-emoji="👏">👏</button>
+                        <button class="reaction-btn" data-emoji="🍿">🍿</button>
+                    </div>
+                </div>
+
+                <!-- Messages -->
+                <div id="messages-container" class="messages-container"></div>
+
+                <!-- Message input -->
+                <div class="message-bar">
+                    <input type="text" id="message-input" class="message-input-field" placeholder="Type a message…">
+                    <button id="send-message-btn" class="send-btn" title="Send message">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </div>
             </section>
+
+            <!-- Movie Mode Side Panel placeholder -->
+            <div id="movie-panel" class="movie-panel hidden"></div>
         </div>
     </div>
 
@@ -247,8 +288,8 @@
 
                 <div class="quick-samples">
                     <span class="sample-label">Quick sample test:</span>
-                    <button type="button" class="sample-btn" data-url="https://www.w3schools.com/html/mov_bbb.mp4">Big Buck Bunny (MP4)</button>
-                    <button type="button" class="sample-btn" data-url="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4">Blooming Flowers (MP4)</button>
+                    <button type="button" class="sample-btn" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">Big Buck Bunny (MP4)</button>
+                    <button type="button" class="sample-btn" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4">For Bigger Blazes (MP4)</button>
                 </div>
             </div>
         </div>

@@ -517,34 +517,34 @@ body {
   gap: 12px;
   z-index: 50;
 }
-.room-header-left { flex: 1; }
-.room-header-center { display: flex; align-items: center; justify-content: center; }
-.room-header-right { flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+/* ---- Header layout ---- */
+.room-header-left { display: flex; align-items: center; }
+.room-header-right { flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 
-/* Room info trigger button */
-.room-info-trigger {
-  position: relative;
+/* Brand-as-room-info button */
+.brand-info-btn {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 16px;
-  background: var(--surface-hover);
-  border: 1.5px solid var(--border-color);
+  padding: 6px 12px 6px 6px;
+  background: transparent;
+  border: 1.5px solid transparent;
   border-radius: var(--radius-pill);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-family: inherit;
-  font-size: 0.95rem;
-  font-weight: 600;
   cursor: pointer;
-  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+  transition: background var(--t-fast), border-color var(--t-fast);
+  text-decoration: none;
 }
-.room-info-trigger i {
-  font-size: 1.15rem;
+.brand-info-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-color);
 }
-.room-info-trigger:hover {
-  background: var(--brand-500);
-  border-color: var(--brand-500);
-  color: #fff;
+.brand-name-room {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
 }
 .participant-badge {
   background: var(--brand-500);
@@ -560,14 +560,13 @@ body {
   flex-shrink: 0;
   transition: background var(--t-fast);
 }
-.room-info-trigger:hover .participant-badge { background: rgba(255,255,255,0.3); }
-
+.brand-info-btn:hover .participant-badge { background: var(--brand-700); }
 /* Room action icon buttons */
 .room-action-btn {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  font-size: 1.15rem;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  font-size: 1.1rem;
 }
 .room-action-btn:hover { background: var(--surface-hover); color: var(--brand-500); }
 .danger-action:hover { background: rgba(248, 113, 113, 0.14) !important; color: var(--accent-red) !important; }
@@ -853,23 +852,12 @@ body {
   position: relative;
 }
 
-.chat-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  min-height: 0;
-}
-
 /* ---- Screen Share ---- */
 .screen-share-container {
   background: #000;
   position: relative;
   flex-shrink: 0;
-  width: 100%;
-  min-height: 280px;
-  height: 45vh;
-  max-height: 52vh;
+  max-height: 45vh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -878,9 +866,9 @@ body {
 #screen-share-video {
   width: 100%;
   height: 100%;
+  max-height: 45vh;
   object-fit: contain;
   display: block;
-  background: #000;
 }
 .screen-share-overlay {
   position: absolute;
@@ -1117,9 +1105,7 @@ body {
 .room-body.movie-mode {
   flex-direction: row;
 }
-.room-body.movie-mode .participants-sidebar {
-  display: none !important;
-}
+/* In movie mode, screen share takes left 65% */
 .room-body.movie-mode .chat-section {
   display: flex;
   flex-direction: row;
@@ -1128,49 +1114,193 @@ body {
 }
 .room-body.movie-mode .screen-share-container {
   flex: 1;
-  max-height: none !important;
-  height: 100% !important;
-  min-height: 0;
-  background: #000;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  position: relative;
-}
-.room-body.movie-mode #screen-share-video,
-.room-body.movie-mode #group-video-player {
-  max-height: none !important;
-  height: 100% !important;
-  width: 100% !important;
-  object-fit: contain;
-  background: #000;
-}
-.room-body.movie-mode .chat-main {
-  width: 340px;
-  min-width: 280px;
-  max-width: 380px;
+  max-height: none;
   height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+.room-body.movie-mode #screen-share-video {
+  max-height: none;
+  flex: 1;
+  height: auto;
+}
+/* In movie mode, messages + input collapse to right panel */
+.movie-chat-panel {
+  width: 320px;
+  min-width: 260px;
+  border-left: 1.5px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  border-left: 1.5px solid var(--border-color);
   background: var(--surface-card);
-  flex-shrink: 0;
   overflow: hidden;
-}
-.room-body.movie-mode .chat-main .messages-container {
-  flex: 1;
-  overflow-y: auto;
-}
-.room-body.movie-mode .chat-main .message-bar {
   flex-shrink: 0;
 }
-#movie-mode-btn.movie-active {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
-  color: #fff !important;
-  box-shadow: 0 0 14px rgba(99, 102, 241, 0.5);
+/* Hide sidebar in movie mode (chat panel serves the purpose) */
+.room-body.movie-mode .participants-sidebar { display: none; }
+
+/* ---- Movie Mode Control Bar ---- */
+.movie-controls-bar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: var(--surface-card);
+  border-top: 1.5px solid var(--border-color);
+  flex-shrink: 0;
+  z-index: 20;
+}
+.mm-controls-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.mm-ctrl-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 18px;
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-input);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast), transform var(--t-fast);
+  min-width: 60px;
+}
+.mm-ctrl-btn i {
+  font-size: 1.25rem;
+  margin-bottom: 2px;
+}
+.mm-ctrl-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--brand-500);
+  color: var(--brand-500);
+  transform: translateY(-2px);
+}
+.mm-ctrl-btn.mm-active {
+  background: linear-gradient(135deg, var(--brand-500), var(--brand-700));
+  border-color: var(--brand-500);
+  color: #fff;
+}
+.mm-ctrl-btn.mm-ctrl-danger {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: var(--accent-red);
+}
+.mm-ctrl-btn.mm-ctrl-danger:hover {
+  background: rgba(248, 113, 113, 0.14);
+  border-color: var(--accent-red);
+  color: var(--accent-red);
 }
 
+/* ---- Emoji Reaction Picker ---- */
+.reaction-picker {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--surface-card);
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-md);
+  animation: fadeIn 0.15s ease forwards;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.reaction-btn {
+  font-size: 1.5rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  transition: transform var(--t-fast), background var(--t-fast);
+  line-height: 1;
+}
+.reaction-btn:hover {
+  transform: scale(1.3);
+  background: var(--surface-hover);
+}
+
+/* ---- Reaction Fly Overlay ---- */
+.reaction-overlay-item {
+  position: absolute;
+  bottom: 60px;
+  right: calc(20px + var(--rand-x, 0px));
+  font-size: 2.5rem;
+  pointer-events: none;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition: none;
+  z-index: 30;
+  user-select: none;
+}
+.reaction-overlay-item.reaction-fly {
+  animation: reactionFloat 2.5s ease-out forwards;
+}
+@keyframes reactionFloat {
+  0%   { opacity: 1; transform: translateY(0) scale(1); }
+  60%  { opacity: 0.9; transform: translateY(-120px) scale(1.2); }
+  100% { opacity: 0; transform: translateY(-240px) scale(0.8); }
+}
+
+/* ---- Webcam Grid Row (movie mode: horizontal below video) ---- */
+.webcam-grid.webcam-grid-row {
+  position: static;
+  flex-direction: row;
+  max-height: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 8px 12px;
+  background: rgba(0,0,0,0.6);
+  gap: 8px;
+  pointer-events: auto;
+  width: 100%;
+  flex-shrink: 0;
+}
+.webcam-grid.webcam-grid-row .webcam-tile {
+  width: 120px;
+  height: 90px;
+  flex-shrink: 0;
+}
+
+/* ---- Quality Control Overlay ---- */
+.quality-control {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+  font-weight: 500;
+  z-index: 15;
+}
+.quality-select {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+.quality-select option {
+  background: #1c1d2b;
+  color: #fff;
+}
 /* ============================================================
    RESPONSIVE — TABLET
    ============================================================ */
@@ -1192,9 +1322,10 @@ body {
   .toast-container { top: auto; bottom: 16px; right: 12px; left: 12px; max-width: 100%; }
 
   /* Room header: collapse brand name on mobile */
+  .brand-name-room { display: none; }
   .brand-name { display: none; }
-  .room-header { padding: 0 10px; gap: 8px; }
-  .room-action-btn { width: 36px; height: 36px; font-size: 1rem; }
+  .room-header { padding: 0 10px; gap: 6px; }
+  .room-action-btn { width: 36px; height: 36px; font-size: 0.95rem; }
 
   /* Sidebar: off-canvas on mobile */
   .participants-sidebar {
@@ -1230,17 +1361,21 @@ body {
     flex-direction: column;
   }
   .room-body.movie-mode .screen-share-container {
-    max-height: 45vh !important;
-    height: 45vh !important;
-    flex: none;
+    max-height: 45vh;
+    height: 45vh;
   }
-  .room-body.movie-mode .chat-main {
+  .movie-chat-panel {
     width: 100%;
-    max-width: none;
-    flex: 1;
     border-left: none;
     border-top: 1.5px solid var(--border-color);
   }
+  /* Movie controls bar compact */
+  .mm-ctrl-btn {
+    padding: 8px 12px;
+    min-width: 48px;
+    font-size: 0.68rem;
+  }
+  .mm-ctrl-btn i { font-size: 1.1rem; }
 }
 
 @media (max-width: 400px) {
