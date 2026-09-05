@@ -4,119 +4,204 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Temporary Chat Room</title>
+    <title>Echo Rooms — Temporary Chat Rooms</title>
+    <meta name="description" content="Create or join a temporary, encrypted chat room with screen sharing. No sign-up required.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- PeerJS library for WebRTC connections -->
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
-    <!-- UUID library for generating room IDs -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/uuid/8.3.2/uuid.min.js"></script>
-    <!-- Avatar generation script -->
     <script src="js/avatars.js"></script>
 </head>
 
 <body class="light-mode">
+    <!-- Toast Notification Container -->
     <div id="toast-container" class="toast-container"></div>
-    <div class="container">
-        <header>
-            <h1>Temporary Chat Room</h1>
-            <button id="theme-toggle" aria-label="Toggle dark mode">
+
+    <!-- ========== HOME SCREEN ========== -->
+    <div id="home-screen" class="home-screen">
+        <div class="home-bg-orb orb-1"></div>
+        <div class="home-bg-orb orb-2"></div>
+        <div class="home-bg-orb orb-3"></div>
+
+        <div class="home-header">
+            <div class="brand">
+                <div class="brand-icon"><i class="fas fa-headphones-alt"></i></div>
+                <span class="brand-name">Echo Rooms</span>
+            </div>
+            <button id="theme-toggle" class="icon-btn" aria-label="Toggle dark mode" title="Toggle theme">
                 <i class="fas fa-moon"></i>
             </button>
-        </header>
-
-        <!-- Home screen (create/join room) -->
-        <div id="home-screen">
-            <div class="card">
-                <h2>Create or Join a Room</h2>
-                <div class="form-group">
-                    <label for="username">Your Display Name</label>
-                    <input type="text" id="username" placeholder="Enter your name" required>
-                </div>
-                <div class="avatar-selection">
-                    <p>Select a profile picture:</p>
-                    <div class="avatar-options">
-                        <img src="" alt="Avatar 1" class="avatar" data-seed="avatar1">
-                        <img src="" alt="Avatar 2" class="avatar" data-seed="avatar2">
-                        <img src="" alt="Avatar 3" class="avatar" data-seed="avatar3">
-                        <img src="" alt="Avatar 4" class="avatar" data-seed="avatar4">
-                    </div>
-                    <div class="avatar-actions">
-                        <button id="refresh-avatars" class="action-btn">
-                            <i class="fas fa-sync-alt"></i> Refresh Options
-                        </button>
-                        <div class="custom-avatar">
-                            <label for="custom-avatar-url">Or enter avatar URL:</label>
-                            <input type="text" id="custom-avatar-url" placeholder="https://example.com/avatar.png">
-                            <button id="use-custom-avatar" class="secondary-btn">Use Custom</button>
-                        </div>
-                    </div>
-                </div>
-                <div class="action-buttons">
-                    <button id="create-room-btn" class="primary-btn">Create New Room</button>
-                    <div class="or-divider">OR</div>
-                    <div class="form-group">
-                        <label for="room-id">Join with Room ID</label>
-                        <div class="join-input-group">
-                            <input type="text" id="room-id" placeholder="Enter room ID">
-                            <button id="join-room-btn" class="secondary-btn">Join Room</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
         </div>
 
-        <!-- Chat room screen (hidden initially) -->
-        <div id="chat-room" class="hidden">
-            <div class="room-info">
-                <h2>Room: <span id="current-room-id"></span></h2>
-                <div class="room-actions">
-                    <button id="share-screen-btn" class="action-btn">
-                        <i class="fas fa-desktop"></i> Share Screen
-                    </button>
-                    <button id="copy-room-link-btn" class="action-btn">
-                        <i class="fas fa-link"></i> Copy Link
-                    </button>
-                    <button id="copy-room-id" class="action-btn">
-                        <i class="fas fa-copy"></i> Copy ID
-                    </button>
-                    <button id="leave-room-btn" class="action-btn danger">
-                        <i class="fas fa-sign-out-alt"></i> Leave Room
-                    </button>
+        <div class="home-card">
+            <div class="home-card-header">
+                <h1>Start a Conversation</h1>
+                <p class="home-subtitle">No account needed. Just pick a name and go.</p>
+            </div>
+
+            <!-- Username Input -->
+            <div class="field-group">
+                <div class="field-wrap">
+                    <i class="fas fa-user field-icon"></i>
+                    <input type="text" id="username" class="field-input" placeholder="Your display name" autocomplete="off" spellcheck="false">
                 </div>
             </div>
 
-            <div class="chat-container">
-                <div class="participants-section">
-                    <h3>Participants</h3>
-                    <ul id="participants-list"></ul>
-                </div>
-
-                <div class="main-chat-section">
-                    <div class="screen-share-container hidden" id="screen-share-container">
-                        <video id="screen-share-video" autoplay playsinline></video>
-                        <div class="screen-share-info">
-                            <span id="screen-share-user">Someone</span> is sharing their screen
-                            <button id="stop-screen-share" class="danger-btn hidden">Stop Sharing</button>
-                        </div>
-                    </div>
-
-                    <div class="messages-container" id="messages-container">
-                        <!-- Messages will be added here dynamically -->
-                    </div>
-
-                    <div class="message-input">
-                        <input type="text" id="message-input" placeholder="Type your message...">
-                        <button id="send-message-btn">
-                            <i class="fas fa-paper-plane"></i>
+            <!-- Avatar Selection -->
+            <div class="avatar-section">
+                <div class="avatar-section-top">
+                    <span class="avatar-label">Profile picture</span>
+                    <div class="avatar-section-actions">
+                        <button id="refresh-avatars" class="icon-btn-sm" title="Refresh avatars">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                        <button id="custom-avatar-toggle" class="text-btn" title="Use custom image URL">
+                            Custom URL
                         </button>
                     </div>
+                </div>
+                <div class="avatar-strip">
+                    <img src="" alt="Avatar 1" class="avatar-opt" data-seed="avatar1">
+                    <img src="" alt="Avatar 2" class="avatar-opt" data-seed="avatar2">
+                    <img src="" alt="Avatar 3" class="avatar-opt" data-seed="avatar3">
+                    <img src="" alt="Avatar 4" class="avatar-opt" data-seed="avatar4">
+                </div>
+                <!-- Custom URL (collapsed by default) -->
+                <div id="custom-avatar-panel" class="custom-avatar-panel hidden">
+                    <div class="custom-url-wrap">
+                        <input type="text" id="custom-avatar-url" class="field-input" placeholder="https://example.com/avatar.png">
+                        <button id="use-custom-avatar" class="apply-btn">Apply</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="home-actions">
+                <button id="create-room-btn" class="btn-primary">
+                    <i class="fas fa-plus-circle"></i> Create Room
+                </button>
+                <div class="divider"><span>or join existing</span></div>
+                <div class="join-row">
+                    <input type="text" id="room-id" class="field-input join-input" placeholder="Room code (e.g. AB3X9P)" maxlength="6" spellcheck="false" autocomplete="off">
+                    <button id="join-room-btn" class="btn-secondary">
+                        <i class="fas fa-arrow-right"></i>
+                    </button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Scripts -->
+    <!-- ========== CHAT ROOM ========== -->
+    <div id="chat-room" class="chat-room hidden">
+
+        <!-- Top Bar -->
+        <header class="room-header">
+            <div class="room-header-left">
+                <div class="brand brand-sm">
+                    <div class="brand-icon brand-icon-sm"><i class="fas fa-headphones-alt"></i></div>
+                    <span class="brand-name">Echo</span>
+                </div>
+            </div>
+            <div class="room-header-center">
+                <!-- Room info trigger replaces raw room ID text -->
+                <button id="room-info-btn" class="room-info-trigger" title="Room info & participants">
+                    <i class="fas fa-users"></i>
+                    <span id="participant-count" class="participant-badge">1</span>
+                </button>
+            </div>
+            <div class="room-header-right room-actions">
+                <button id="share-screen-btn" class="icon-btn room-action-btn" title="Share Screen">
+                    <i class="fas fa-desktop"></i>
+                </button>
+                <button id="movie-mode-btn" class="icon-btn room-action-btn" title="Movie Mode" id="movie-mode-btn">
+                    <i class="fas fa-film"></i>
+                </button>
+                <button id="copy-room-link-btn" class="icon-btn room-action-btn" title="Copy Invite Link">
+                    <i class="fas fa-link"></i>
+                </button>
+                <button id="copy-room-id" class="icon-btn room-action-btn" title="Copy Room ID">
+                    <i class="fas fa-copy"></i>
+                </button>
+                <button id="theme-toggle-room" class="icon-btn room-action-btn" title="Toggle theme">
+                    <i class="fas fa-moon"></i>
+                </button>
+                <button id="leave-room-btn" class="icon-btn room-action-btn danger-action" title="Leave Room">
+                    <i class="fas fa-sign-out-alt"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Room Info Panel (popover) -->
+        <div id="room-info-panel" class="room-info-panel hidden">
+            <div class="rip-header">
+                <span class="rip-title">Room Info</span>
+                <button id="close-room-info" class="icon-btn-sm"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="rip-id-row">
+                <span class="rip-label">Room ID</span>
+                <span id="rip-room-id" class="rip-code">——</span>
+                <button id="rip-copy-id" class="icon-btn-sm" title="Copy ID"><i class="fas fa-copy"></i></button>
+            </div>
+            <div class="rip-participants-label">Participants</div>
+            <ul id="participants-list" class="rip-participants"></ul>
+        </div>
+        <div id="room-info-overlay" class="room-info-overlay hidden"></div>
+
+        <!-- Main Body -->
+        <div class="room-body" id="room-body">
+
+            <!-- Participants Sidebar (visible on desktop, collapsible on mobile) -->
+            <aside class="participants-sidebar" id="participants-sidebar">
+                <div class="sidebar-header">
+                    <span>People</span>
+                    <button id="close-sidebar-btn" class="icon-btn-sm sidebar-close-btn" title="Close">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                </div>
+                <ul id="sidebar-participants-list" class="sidebar-participants"></ul>
+            </aside>
+
+            <!-- Chat Section -->
+            <section class="chat-section">
+                <!-- Screen share container (hidden unless sharing) -->
+                <div id="screen-share-container" class="screen-share-container hidden">
+                    <video id="screen-share-video" autoplay playsinline></video>
+                    <div class="screen-share-overlay">
+                        <span class="screen-share-badge">
+                            <i class="fas fa-desktop"></i>
+                            <span id="screen-share-user">Someone</span> is sharing
+                        </span>
+                        <button id="stop-screen-share" class="stop-share-btn hidden">
+                            <i class="fas fa-stop-circle"></i> Stop Sharing
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Messages -->
+                <div id="messages-container" class="messages-container"></div>
+
+                <!-- Message input -->
+                <div class="message-bar">
+                    <button id="toggle-sidebar-btn" class="icon-btn sidebar-toggle-btn" title="Toggle participants">
+                        <i class="fas fa-users"></i>
+                    </button>
+                    <input type="text" id="message-input" class="message-input-field" placeholder="Type a message…">
+                    <button id="send-message-btn" class="send-btn">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Movie Mode Side Panel (video + chat side-by-side) -->
+            <div id="movie-panel" class="movie-panel hidden">
+                <!-- reuses #screen-share-container in movie mode via JS -->
+            </div>
+        </div>
+    </div>
+
     <script src="js/app.js"></script>
 </body>
 

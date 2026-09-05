@@ -13,7 +13,7 @@
    */
   function generateAvatarOptions(collection = null) {
     // Find all avatar images
-    const avatarImages = document.querySelectorAll("img.avatar");
+    const avatarImages = document.querySelectorAll("img.avatar-opt");
 
     avatarImages.forEach((img, index) => {
       // Get or set a seed for this avatar
