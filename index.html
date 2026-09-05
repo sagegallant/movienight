@@ -2,336 +2,348 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Echo Rooms — Temporary Chat Rooms</title>
-    <meta name="description" content="Create or join a temporary, encrypted chat room with screen sharing. No sign-up required.">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/styles.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/uuid/8.3.2/uuid.min.js"></script>
-    <script src="js/avatars.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>STANDBY — Private Screening Rooms</title>
+  <meta name="description" content="Private peer-to-peer screening room in your browser. Share screen, watch videos together, and chat live.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,400..700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/uuid/8.3.2/uuid.min.js"></script>
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="js/avatars.js"></script>
 </head>
 
-<body class="light-mode">
-    <!-- Toast Notification Container -->
-    <div id="toast-container" class="toast-container"></div>
+<body>
+  <div id="grain"></div>
+  <div id="toast-container" class="toast-container"></div>
 
-    <!-- ========== HOME SCREEN ========== -->
-    <div id="home-screen" class="home-screen">
-        <div class="home-bg-orb orb-1"></div>
-        <div class="home-bg-orb orb-2"></div>
-        <div class="home-bg-orb orb-3"></div>
+  <!-- ============ LOBBY / HOME SCREEN ============ -->
+  <section id="home-screen" class="lobby">
+    <div class="lobby-grid">
+      <div class="lobby-left">
+        <div class="brandrow">
+          <span class="lamp on"></span>
+          <i class="fas fa-film brand-icon-logo"></i>
+          <span class="wordmark">STANDBY</span>
+        </div>
+        <p class="eyebrow">PRIVATE SCREENING ROOMS · PEER-TO-PEER · IN-BROWSER</p>
+        <h1>The lights go down <em>together</em>.</h1>
+        <p class="lede">
+          Standby is a private screening room that lives in your browser. Play a video file, paste a direct media link,
+          or share your screen live — media travels straight from your machine to your friends.
+        </p>
+        <ul class="ticks">
+          <li>
+            <span class="lamp on"></span>
+            <div><b>Peer-to-Peer Streaming.</b> Media moves directly between participants using WebRTC data and media channels.</div>
+          </li>
+          <li>
+            <span class="lamp on"></span>
+            <div><b>Host Approval Required.</b> Guests wait at the door until the host approves their request to enter.</div>
+          </li>
+          <li>
+            <span class="lamp on"></span>
+            <div><b>Zero Setup.</b> No account or sign-up needed. Enter a name and start screening immediately.</div>
+          </li>
+        </ul>
+      </div>
 
-        <div class="home-header">
-            <div class="brand">
-                <div class="brand-icon"><i class="fas fa-headphones-alt"></i></div>
-                <span class="brand-name">Echo Rooms</span>
-            </div>
-            <button id="theme-toggle" class="icon-btn" aria-label="Toggle dark mode" title="Toggle theme">
-                <i class="fas fa-moon"></i>
+      <div class="booth">
+        <span class="notch l"></span>
+        <span class="notch r"></span>
+        <div class="booth-label">
+          <span class="lamp on"></span>TICKET BOOTH
+        </div>
+
+        <div class="booth-row">
+          <span class="booth-sub">SELECT AVATAR</span>
+          <button class="btn ghost" id="refresh-avatars">
+            <i class="fas fa-random"></i> SHUFFLE
+          </button>
+        </div>
+
+        <div class="avatar-strip">
+          <img src="" alt="Avatar 1" class="avatar-opt selected" data-seed="avatar1">
+          <img src="" alt="Avatar 2" class="avatar-opt" data-seed="avatar2">
+          <img src="" alt="Avatar 3" class="avatar-opt" data-seed="avatar3">
+          <img src="" alt="Avatar 4" class="avatar-opt" data-seed="avatar4">
+        </div>
+
+        <label class="field-label" for="username">NAME ON THE MARQUEE</label>
+        <input id="username" maxlength="24" autocomplete="off" spellcheck="false" placeholder="e.g. Dana">
+
+        <button class="btn primary big" id="create-room-btn">
+          <i class="fas fa-play-circle"></i> START A NEW SCREENING
+        </button>
+
+        <div class="or-rule">OR JOIN WITH A CODE</div>
+
+        <!-- Hidden input for js/app.js room-id compatibility -->
+        <input type="hidden" id="room-id">
+
+        <!-- 6-digit Segmented Room Code Input -->
+        <div id="codeBoxes">
+          <input class="codebox" id="cb-0" maxlength="1" autocomplete="off">
+          <input class="codebox" id="cb-1" maxlength="1" autocomplete="off">
+          <input class="codebox" id="cb-2" maxlength="1" autocomplete="off">
+          <span class="cdot"></span>
+          <input class="codebox" id="cb-3" maxlength="1" autocomplete="off">
+          <input class="codebox" id="cb-4" maxlength="1" autocomplete="off">
+          <input class="codebox" id="cb-5" maxlength="1" autocomplete="off">
+        </div>
+
+        <button class="btn ghost big" id="join-room-btn">
+          <i class="fas fa-sign-in-alt"></i> JOIN THE ROOM
+        </button>
+
+        <p class="fineprint">NO ACCOUNTS · ENCRYPTED P2P · MEDIA NEVER TOUCHES A SERVER</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CHAT & SCREENING ROOM ============ -->
+  <section id="chat-room" class="chat-room hidden">
+    <header class="room-header" id="roomHead">
+      <div class="room-header-left">
+        <span class="lamp on"></span>
+        <span class="hword">STANDBY</span>
+        <span class="hsep"></span>
+        <button class="chip" id="room-info-btn" title="Room Info &amp; Participants (Click to view people or copy code)">
+          <i class="fas fa-users"></i>
+          <span id="rip-room-id">ABC123</span>
+          <span class="cdot"></span>
+          <span id="participant-count">1</span>
+        </button>
+      </div>
+
+      <span id="nowShowing">STANDBY — NOTHING SCREENING</span>
+
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="iconbtn" id="toggle-camera-btn" title="Turn Camera On">
+          <i class="fas fa-video-slash"></i>
+        </button>
+        <button class="iconbtn" id="share-screen-btn" title="Share Screen">
+          <i class="fas fa-desktop"></i>
+        </button>
+        <button class="iconbtn" id="group-video-btn" title="Watch Video Together">
+          <i class="fas fa-film"></i>
+        </button>
+
+        <button class="btn tiny ghost" id="rip-invite-btn">
+          <i class="fas fa-user-plus"></i> INVITE
+        </button>
+
+        <button class="iconbtn danger-action" id="leave-room-btn" title="Leave room" style="color:var(--red)">
+          <i class="fas fa-sign-out-alt"></i>
+        </button>
+      </div>
+    </header>
+
+    <div class="room-body" id="room-body">
+      <!-- Central Cinema Stage -->
+      <main class="chat-section">
+        <div class="stage-wrapper" id="screen-share-container">
+          <video id="screen-share-video" autoplay playsinline></video>
+
+          <!-- Participant Webcam Overlay on Both Sides of Player -->
+          <div id="webcam-grid" class="webcam-stage-grid">
+            <div id="webcams-left" class="webcam-column left"></div>
+            <div id="webcams-right" class="webcam-column right"></div>
+          </div>
+
+          <div class="stage-top" id="stageTop">
+            <span class="badge live"><span class="live-dot"></span>LIVE</span>
+            <span class="badge" id="screen-share-user">Someone is sharing</span>
+            <button class="btn tiny danger hidden" id="host-stop-screen-share-badge" style="margin-left:auto;pointer-events:auto;">
+              <i class="fas fa-ban"></i> STOP PARTICIPANT STREAM
             </button>
-        </div>
+          </div>
 
-        <div class="home-card">
-            <div class="home-card-header">
-                <h1>Start a Conversation</h1>
-                <p class="home-subtitle">No account needed. Just pick a name and go.</p>
-            </div>
-
-            <!-- Username Input -->
-            <div class="field-group">
-                <div class="field-wrap">
-                    <i class="fas fa-user field-icon"></i>
-                    <input type="text" id="username" class="field-input" placeholder="Your display name" autocomplete="off" spellcheck="false">
-                </div>
-            </div>
-
-            <!-- Avatar Selection -->
-            <div class="avatar-section">
-                <div class="avatar-section-top">
-                    <span class="avatar-label">Profile picture</span>
-                    <div class="avatar-section-actions">
-                        <button id="refresh-avatars" class="icon-btn-sm" title="Refresh avatars">
-                            <i class="fas fa-sync-alt"></i>
-                        </button>
-                        <button id="custom-avatar-toggle" class="text-btn" title="Use custom image URL">
-                            Custom URL
-                        </button>
-                    </div>
-                </div>
-                <div class="avatar-strip">
-                    <img src="" alt="Avatar 1" class="avatar-opt" data-seed="avatar1">
-                    <img src="" alt="Avatar 2" class="avatar-opt" data-seed="avatar2">
-                    <img src="" alt="Avatar 3" class="avatar-opt" data-seed="avatar3">
-                    <img src="" alt="Avatar 4" class="avatar-opt" data-seed="avatar4">
-                </div>
-                <!-- Custom URL (collapsed by default) -->
-                <div id="custom-avatar-panel" class="custom-avatar-panel hidden">
-                    <div class="custom-url-wrap">
-                        <input type="text" id="custom-avatar-url" class="field-input" placeholder="https://example.com/avatar.png">
-                        <button id="use-custom-avatar" class="apply-btn">Apply</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Actions -->
-            <div class="home-actions">
-                <button id="create-room-btn" class="btn-primary">
-                    <i class="fas fa-plus-circle"></i> Create Room
+          <!-- Stage Empty Overlay -->
+          <div id="stageEmpty" class="overlay-center">
+            <div>
+              <span class="lamp big breath on" style="margin:0 auto"></span>
+              <div class="se-eyebrow">STANDBY</div>
+              <h2 class="se-title">The room is dark.</h2>
+              <p class="se-sub">
+                Open a local file or paste a media link to stream in full quality, or share your screen live.
+              </p>
+              <div class="se-actions">
+                <button class="btn ghost" id="seFile">
+                  <i class="fas fa-file-video"></i> OPEN A FILE
                 </button>
-                <div class="divider"><span>or join existing</span></div>
-                <div class="join-row">
-                    <input type="text" id="room-id" class="field-input join-input" placeholder="Room code (e.g. AB3X9P)" maxlength="6" spellcheck="false" autocomplete="off">
-                    <button id="join-room-btn" class="btn-secondary">
-                        <i class="fas fa-arrow-right"></i>
-                    </button>
-                </div>
+                <button class="btn ghost" id="seUrl">
+                  <i class="fas fa-link"></i> FROM A LINK
+                </button>
+                <button class="btn ghost" id="seScreen">
+                  <i class="fas fa-desktop"></i> SHARE YOUR SCREEN
+                </button>
+              </div>
             </div>
+          </div>
+
+          <!-- Transport Control Bar Overlay -->
+          <div id="transport" class="transport-bar hidden">
+            <div class="tp">
+              <button class="iconbtn" id="tpPlayBtn" title="Play/Pause">
+                <i class="fas fa-play"></i>
+              </button>
+              <span class="mono-t" id="tpCurTime">0:00</span>
+              <input type="range" id="tpSeek" min="0" max="1000" value="0">
+              <span class="mono-t" id="tpDurTime">0:00</span>
+              <button class="iconbtn" id="tpMuteBtn" title="Mute/Unmute">
+                <i class="fas fa-volume-up"></i>
+              </button>
+              <input type="range" id="tpVol" min="0" max="1" step="0.01" value="1">
+            </div>
+            <div class="tp-common">
+              <button class="iconbtn" id="stage-mic-btn" title="Unmute Microphone">
+                <i class="fas fa-microphone-slash"></i>
+              </button>
+              <button class="iconbtn" id="stage-cam-btn" title="Turn Camera On">
+                <i class="fas fa-video-slash"></i>
+              </button>
+              <button class="iconbtn" id="toggle-webcams-btn" title="Show/Hide Cameras on Stage">
+                <i class="fas fa-users"></i>
+              </button>
+              <button class="btn tiny danger hidden" id="stop-screen-share">
+                <i class="fas fa-stop"></i> STOP STREAM
+              </button>
+              <button class="btn tiny danger hidden" id="host-stop-screen-share">
+                <i class="fas fa-ban"></i> FORCE STOP (HOST)
+              </button>
+              <button class="iconbtn" id="tpFsBtn" title="Fullscreen">
+                <i class="fas fa-expand"></i>
+              </button>
+            </div>
+          </div>
         </div>
+      </main>
+
+      <!-- Sidebar (100% Dedicated to WhatsApp Style Chat) -->
+      <aside class="participants-sidebar" id="side">
+        <div id="chatWrap" style="flex:1;display:flex;flex-direction:column;height:100%;min-height:0;">
+          <div class="panel-head"><i class="fas fa-comments"></i> BACKROW CHAT</div>
+          <div id="messages-container" class="messages-container"></div>
+          <div class="message-bar">
+            <input type="text" id="message-input" class="message-input-field" placeholder="Say something to the back row…" autocomplete="off">
+            <button id="send-message-btn" class="iconbtn" title="Send">
+              <i class="fas fa-paper-plane"></i>
+            </button>
+          </div>
+        </div>
+      </aside>
     </div>
+  </section>
 
-    <!-- ========== CHAT ROOM ========== -->
-    <div id="chat-room" class="chat-room hidden">
+  <!-- ============ MODALS ============ -->
 
-        <!-- Top Bar -->
-        <header class="room-header">
-            <div class="room-header-left">
-                <!-- Brand icon opens room info panel (replaces separate room-info-btn) -->
-                <button id="room-info-btn" class="brand-info-btn" title="Room info &amp; participants">
-                    <div class="brand-icon brand-icon-sm"><i class="fas fa-headphones-alt"></i></div>
-                    <span class="brand-name-room">Echo</span>
-                    <span id="participant-count" class="participant-badge">1</span>
-                </button>
-            </div>
-            <div class="room-header-right room-actions">
-                <button id="group-video-btn" class="icon-btn room-action-btn" title="Watch Video Together">
-                    <i class="fas fa-play-circle"></i>
-                </button>
-                <button id="toggle-camera-btn" class="icon-btn room-action-btn" title="Toggle Camera">
-                    <i class="fas fa-video"></i>
-                </button>
-                <button id="share-screen-btn" class="icon-btn room-action-btn" title="Share Screen">
-                    <i class="fas fa-desktop"></i>
-                </button>
-                <button id="movie-mode-btn" class="icon-btn room-action-btn" title="Movie Mode">
-                    <i class="fas fa-film"></i>
-                </button>
-                <button id="theme-toggle-room" class="icon-btn room-action-btn" title="Toggle theme">
-                    <i class="fas fa-moon"></i>
-                </button>
-                <button id="leave-room-btn" class="icon-btn room-action-btn danger-action" title="Leave Room">
-                    <i class="fas fa-sign-out-alt"></i>
-                </button>
-            </div>
-        </header>
+  <!-- Room Info & Participants Modal -->
+  <div id="room-info-modal" class="modal-overlay hidden">
+    <div class="modal-card" style="max-width: 440px; text-align: left;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 14px;">
+        <h3 class="modal-title" style="font-size: 18px; margin: 0;"><i class="fas fa-users"></i> Room &amp; Participants</h3>
+        <button class="iconbtn" id="close-room-info-modal" style="width:32px;height:32px;"><i class="fas fa-times"></i></button>
+      </div>
 
-        <!-- Room Info Panel (popover) -->
-        <div id="room-info-panel" class="room-info-panel hidden">
-            <div class="rip-header">
-                <span class="rip-title">Room Info</span>
-                <button id="close-room-info" class="icon-btn-sm"><i class="fas fa-times"></i></button>
-            </div>
-            <div class="rip-id-row">
-                <span class="rip-label">Room ID</span>
-                <span id="rip-room-id" class="rip-code">——</span>
-                <button id="rip-copy-id" class="icon-btn-sm" title="Copy ID"><i class="fas fa-copy"></i></button>
-            </div>
-            <div class="rip-invite-box">
-                <button id="rip-invite-btn" class="rip-invite-btn" title="Copy invitation link">
-                    <i class="fas fa-user-plus"></i> Invite / Add Person
-                </button>
-            </div>
-            <div class="rip-participants-label">Participants</div>
-            <ul id="participants-list" class="rip-participants"></ul>
+      <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg0); border:1px solid var(--line2); padding:10px 14px; border-radius:10px; margin-bottom: 12px;">
+        <div>
+          <span style="font:600 10px var(--fm); color:var(--ink3); letter-spacing:.15em; display:block;">ROOM CODE</span>
+          <span id="modal-room-id" style="font:700 20px var(--fm); color:var(--amber);">ABC123</span>
         </div>
-        <div id="room-info-overlay" class="room-info-overlay hidden"></div>
+        <button class="btn tiny ghost" id="rip-copy-id"><i class="fas fa-copy"></i> COPY CODE</button>
+      </div>
 
-        <!-- Main Body -->
-        <div class="room-body" id="room-body">
+      <div style="margin-bottom: 14px;">
+        <button class="btn primary tiny" id="rip-modal-invite-btn" style="width:100%;">
+          <i class="fas fa-user-plus"></i> COPY INVITE LINK
+        </button>
+      </div>
 
-            <!-- Participants Sidebar (visible on desktop, collapsible on mobile) -->
-            <aside class="participants-sidebar" id="participants-sidebar">
-                <div class="sidebar-header">
-                    <span>People</span>
-                    <button id="close-sidebar-btn" class="icon-btn-sm sidebar-close-btn" title="Close">
-                        <i class="fas fa-chevron-left"></i>
-                    </button>
-                </div>
-                <ul id="sidebar-participants-list" class="sidebar-participants"></ul>
-            </aside>
-
-            <!-- Chat Section -->
-            <section class="chat-section">
-                <!-- Screen share / Video watching container -->
-                <div id="screen-share-container" class="screen-share-container hidden">
-                    <video id="screen-share-video" autoplay playsinline></video>
-                    
-                    <!-- Webcam row for watching together -->
-                    <div id="webcam-grid" class="webcam-grid"></div>
-
-                    <div class="screen-share-overlay">
-                        <span class="screen-share-badge">
-                            <i id="stream-type-icon" class="fas fa-desktop"></i>
-                            <span id="screen-share-user">Someone</span> is sharing
-                        </span>
-                        <div class="screen-share-actions">
-                            <button id="stop-screen-share" class="stop-share-btn hidden">
-                                <i class="fas fa-stop-circle"></i> Stop Sharing
-                            </button>
-                            <button id="host-stop-screen-share" class="stop-share-btn host-stop-btn hidden" title="Host can stop presenter stream">
-                                <i class="fas fa-ban"></i> Stop User Share (Host)
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Quality selector for viewers (non-streaming participants only) -->
-                    <div id="quality-control" class="quality-control hidden">
-                        <i class="fas fa-sliders-h quality-icon"></i>
-                        <select id="quality-select" class="quality-select">
-                            <option value="auto">Auto</option>
-                            <option value="high">High</option>
-                            <option value="medium">Medium</option>
-                            <option value="low">Low</option>
-                        </select>
-                    </div>
-                </div>
-
-                <!-- Movie Mode Control Bar (only visible in movie mode) -->
-                <div id="movie-controls-bar" class="movie-controls-bar hidden">
-                    <div class="mm-controls-inner">
-                        <button id="mm-cam-btn" class="mm-ctrl-btn" title="Toggle Camera">
-                            <i class="fas fa-video"></i>
-                            <span>Cam</span>
-                        </button>
-                        <button id="mm-mic-btn" class="mm-ctrl-btn" title="Toggle Microphone">
-                            <i class="fas fa-microphone"></i>
-                            <span>Mic</span>
-                        </button>
-                        <button id="mm-share-btn" class="mm-ctrl-btn" title="Share Screen">
-                            <i class="fas fa-desktop"></i>
-                            <span>Share</span>
-                        </button>
-                        <button id="mm-react-btn" class="mm-ctrl-btn" title="React">
-                            <i class="fas fa-smile"></i>
-                            <span>React</span>
-                        </button>
-                        <button id="mm-leave-btn" class="mm-ctrl-btn mm-ctrl-danger" title="Leave Room">
-                            <i class="fas fa-phone-slash"></i>
-                            <span>Leave</span>
-                        </button>
-                    </div>
-                    <!-- Emoji reaction picker -->
-                    <div id="reaction-picker" class="reaction-picker hidden">
-                        <button class="reaction-btn" data-emoji="👍">👍</button>
-                        <button class="reaction-btn" data-emoji="❤️">❤️</button>
-                        <button class="reaction-btn" data-emoji="😂">😂</button>
-                        <button class="reaction-btn" data-emoji="😮">😮</button>
-                        <button class="reaction-btn" data-emoji="🎉">🎉</button>
-                        <button class="reaction-btn" data-emoji="🔥">🔥</button>
-                        <button class="reaction-btn" data-emoji="👏">👏</button>
-                        <button class="reaction-btn" data-emoji="🍿">🍿</button>
-                    </div>
-                </div>
-
-                <!-- Messages -->
-                <div id="messages-container" class="messages-container"></div>
-
-                <!-- Message input -->
-                <div class="message-bar">
-                    <input type="text" id="message-input" class="message-input-field" placeholder="Type a message…">
-                    <button id="send-message-btn" class="send-btn" title="Send message">
-                        <i class="fas fa-paper-plane"></i>
-                    </button>
-                </div>
-            </section>
-
-            <!-- Movie Mode Side Panel placeholder -->
-            <div id="movie-panel" class="movie-panel hidden"></div>
-        </div>
+      <div class="panel-head" style="padding: 0 0 8px 0;">
+        <i class="fas fa-user-friends"></i> PEOPLE IN ROOM (<span id="modal-p-count">1</span>)
+      </div>
+      <ul id="modal-participants-list" style="list-style:none; max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:8px;"></ul>
     </div>
+  </div>
 
-    <!-- ========== MODALS ========== -->
+  <!-- Video Source Selector Modal -->
+  <div id="video-source-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title"><i class="fas fa-film"></i> Watch Video Together</h3>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Play a video file from your computer or enter a direct URL to stream live to everyone.</p>
 
-    <!-- Video Source Selector Modal -->
-    <div id="video-source-modal" class="modal-overlay hidden">
-        <div class="modal-card">
-            <div class="modal-header">
-                <div class="modal-title"><i class="fas fa-film modal-icon"></i> Watch Video Together</div>
-                <button id="close-video-modal" class="icon-btn-sm"><i class="fas fa-times"></i></button>
-            </div>
-            <div class="modal-body">
-                <p class="modal-desc">Play a video from your computer or enter a URL. The video will be streamed in sync to everyone in the room!</p>
-                
-                <div class="video-option-block">
-                    <label class="modal-label"><i class="fas fa-file-video"></i> Play from Device</label>
-                    <input type="file" id="video-file-input" accept="video/mp4,video/webm,video/ogg,video/*" class="file-input-field">
-                    <button id="play-device-video-btn" class="btn-primary" style="margin-top: 8px;">
-                        <i class="fas fa-play"></i> Stream Selected File
-                    </button>
-                </div>
-
-                <div class="divider"><span>OR</span></div>
-
-                <div class="video-option-block">
-                    <label class="modal-label"><i class="fas fa-globe"></i> Play from URL</label>
-                    <div class="url-input-wrap">
-                        <input type="url" id="video-url-input" class="field-input" placeholder="https://example.com/video.mp4">
-                        <button id="play-url-video-btn" class="btn-secondary">
-                            <i class="fas fa-play"></i> Stream
-                        </button>
-                    </div>
-                </div>
-
-                <div class="quick-samples">
-                    <span class="sample-label">Quick sample test:</span>
-                    <button type="button" class="sample-btn" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">Big Buck Bunny (MP4)</button>
-                    <button type="button" class="sample-btn" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4">For Bigger Blazes (MP4)</button>
-                </div>
-            </div>
+        <div style="margin-bottom: 16px;">
+          <label class="field-label"><i class="fas fa-file-video"></i> FILE FROM DEVICE</label>
+          <input type="file" id="video-file-input" accept="video/*" class="message-input-field" style="height:auto;padding:8px;">
+          <button id="play-device-video-btn" class="btn primary" style="width:100%;margin-top:8px;">
+            <i class="fas fa-play"></i> Stream Selected File
+          </button>
         </div>
-    </div>
 
-    <!-- Host Join Request Approval Modal -->
-    <div id="join-request-modal" class="modal-overlay hidden">
-        <div class="modal-card approval-card">
-            <div class="approval-header">
-                <div class="approval-badge"><i class="fas fa-shield-alt"></i> Host Approval Required</div>
-            </div>
-            <div class="approval-user-info">
-                <img id="approval-user-avatar" class="approval-avatar" src="" alt="User">
-                <div class="approval-details">
-                    <h3 id="approval-user-name">User Name</h3>
-                    <p>wants to join this room</p>
-                </div>
-            </div>
-            <div class="approval-actions">
-                <button id="approve-join-btn" class="btn-approve">
-                    <i class="fas fa-check"></i> Approve
-                </button>
-                <button id="deny-join-btn" class="btn-deny">
-                    <i class="fas fa-times"></i> Deny
-                </button>
-            </div>
+        <div class="or-rule">OR</div>
+
+        <div>
+          <label class="field-label"><i class="fas fa-link"></i> MEDIA URL (DIRECT VIDEO OR YOUTUBE / VIMEO)</label>
+          <input type="url" id="video-url-input" class="message-input-field" placeholder="Video URL or YouTube / Vimeo link">
+          <button id="play-url-video-btn" class="btn primary" style="width:100%;margin-top:8px;">
+            <i class="fas fa-play"></i> Stream URL
+          </button>
+          <div id="url-stream-fallback-box" class="hidden" style="margin-top:10px;padding:10px;background:rgba(240,166,58,0.12);border:1px solid var(--amber);border-radius:8px;font-size:12px;text-align:left;">
+            <p style="margin:0 0 6px 0;color:var(--ink);"><i class="fas fa-info-circle" style="color:var(--amber);"></i> This isn't a direct media URL. Share your screen or tab instead to watch together.</p>
+            <button id="modal-share-screen-fallback-btn" class="btn ghost tiny" style="width:100%;">
+              <i class="fas fa-desktop"></i> SHARE SCREEN / TAB INSTEAD
+            </button>
+          </div>
         </div>
-    </div>
 
-    <!-- Joiner Waiting for Approval Modal -->
-    <div id="join-waiting-modal" class="modal-overlay hidden">
-        <div class="modal-card waiting-card">
-            <div class="waiting-spinner-wrap">
-                <div class="waiting-spinner"></div>
-            </div>
-            <h3 class="waiting-title">Waiting for Host Approval</h3>
-            <p class="waiting-desc">The room host has been notified of your request to join. Please wait a moment...</p>
-            <button id="cancel-join-request-btn" class="btn-secondary">Cancel Request</button>
+        <div style="margin-top: 18px; text-align: center;">
+          <button id="close-video-modal" class="btn ghost tiny">CANCEL</button>
         </div>
+      </div>
     </div>
+  </div>
 
-    <script src="js/app.js"></script>
+  <!-- Host Join Request Approval Modal -->
+  <div id="join-request-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h3 class="modal-title"><i class="fas fa-door-open"></i> Knock Knock</h3>
+      <div class="approval-user-info">
+        <img id="approval-user-avatar" class="approval-avatar" src="" alt="User">
+        <div>
+          <h4 id="approval-user-name" style="font-size:16px;color:var(--ink);">User Name</h4>
+          <p style="font-size:12px;color:var(--ink2);margin:4px 0 0;">wants to join this room</p>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:center;">
+        <button id="approve-join-btn" class="btn primary">
+          <i class="fas fa-check"></i> Approve
+        </button>
+        <button id="deny-join-btn" class="btn danger">
+          <i class="fas fa-times"></i> Deny
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Joiner Waiting for Approval Modal -->
+  <div id="join-waiting-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="waiting-spinner"></div>
+      <h3 class="modal-title">Waiting at the Door</h3>
+      <p class="modal-desc" style="text-align:center;">The room host has been notified of your request to join. Please wait a moment...</p>
+      <button id="cancel-join-request-btn" class="btn ghost">CANCEL REQUEST</button>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
 </body>
 
 </html>
