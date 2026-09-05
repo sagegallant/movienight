@@ -15,22 +15,9 @@
   <em>Zero accounts. Zero tracking. Media travels straight from your computer to your friends.</em>
 </p>
 
-[**Explore Features**](#-key-features) • [**Architecture**](#-architecture--how-it-works) • [**Quickstart**](#-quickstart--local-development) • [**Deployment**](#-deployment-options) • [**GitHub Topics**](#-github-topics) • [**Contributing**](#-contributing)
+[**Explore Features**](#-key-features) • [**Architecture**](#-architecture--how-it-works) • [**Quickstart**](#-quickstart--local-development) • [**Deployment**](#-deployment-options) • [**Contributing**](#-contributing)
 
 </div>
-
----
-
-## 📌 GitHub Topics
-
-To maximize discoverability and community searchability on GitHub, add the following topics in your repository settings:
-
-```text
-webrtc, watch-party, p2p, peer-to-peer, video-streaming, screen-sharing,
-peerjs, youtube-sync, video-synchronization, html5-video, group-video,
-browser-streaming, privacy-focused, zero-backend, movie-night, real-time,
-media-streaming, video-chat, decentralized, javascript
-```
 
 ---
 
