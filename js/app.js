@@ -1,5 +1,5 @@
 // ============================================================
-// Echo Rooms — App State
+// MovieNight — App State
 // ============================================================
 const state = {
   peer: null,
@@ -936,7 +936,10 @@ function setupEventListeners() {
   elements.useCustomAvatarBtn?.addEventListener("click", useCustomAvatar);
   elements.customAvatarToggle?.addEventListener("click", toggleCustomAvatarPanel);
   elements.usernameInput?.addEventListener("input", () => {
-    try { localStorage.setItem("echorooms_username", elements.usernameInput.value.trim()); } catch (e) {}
+    try {
+      localStorage.setItem("movienight_username", elements.usernameInput.value.trim());
+      localStorage.setItem("echorooms_username", elements.usernameInput.value.trim());
+    } catch (e) {}
   });
   elements.roomIdInput?.addEventListener("keypress", (e) => {
     if (e.key === "Enter") joinRoom();
@@ -1090,7 +1093,10 @@ function setupThemeToggle() {
     [elements.themeToggle, elements.themeToggleRoom].forEach(btn => {
       if (btn) btn.innerHTML = `<i class="fas ${icon}"></i>`;
     });
-    try { localStorage.setItem("echorooms_theme", dark ? "dark" : "light"); } catch (e) {}
+    try {
+      localStorage.setItem("movienight_theme", dark ? "dark" : "light");
+      localStorage.setItem("echorooms_theme", dark ? "dark" : "light");
+    } catch (e) {}
   }
 
   [elements.themeToggle, elements.themeToggleRoom].forEach(btn => {
@@ -1099,7 +1105,6 @@ function setupThemeToggle() {
 }
 
 // ============================================================
-/// ============================================================
 // Avatar Selection & Refresh
 // ============================================================
 function setupAvatarSelection() {
@@ -1121,7 +1126,10 @@ function setupAvatarSelection() {
       document.querySelectorAll("img.avatar-opt").forEach((a) => a.classList.remove("selected"));
       avatar.classList.add("selected");
       state.selectedAvatar = avatar.getAttribute("data-avatar") || avatar.src;
-      try { localStorage.setItem("echorooms_avatar", state.selectedAvatar); } catch (err) {}
+      try {
+        localStorage.setItem("movienight_avatar", state.selectedAvatar);
+        localStorage.setItem("echorooms_avatar", state.selectedAvatar);
+      } catch (err) {}
     });
   }
 }
@@ -1159,12 +1167,12 @@ function toggleCustomAvatarPanel() {
 // ============================================================
 function loadCachedUserData() {
   try {
-    const cachedUsername = localStorage.getItem("echorooms_username");
+    const cachedUsername = localStorage.getItem("movienight_username") || localStorage.getItem("echorooms_username");
     if (cachedUsername && elements.usernameInput) {
       elements.usernameInput.value = cachedUsername;
       state.username = cachedUsername;
     }
-    const cachedTheme = localStorage.getItem("echorooms_theme");
+    const cachedTheme = localStorage.getItem("movienight_theme") || localStorage.getItem("echorooms_theme");
     if (cachedTheme === "dark") {
       document.body.classList.remove("light-mode");
       document.body.classList.add("dark-mode");
@@ -1173,7 +1181,7 @@ function loadCachedUserData() {
         if (btn) btn.innerHTML = '<i class="fas fa-sun"></i>';
       });
     }
-    const cachedAvatar = localStorage.getItem("echorooms_avatar");
+    const cachedAvatar = localStorage.getItem("movienight_avatar") || localStorage.getItem("echorooms_avatar");
     if (cachedAvatar) {
       state.selectedAvatar = cachedAvatar;
       const avatarOpts = document.querySelectorAll("img.avatar-opt");
@@ -1203,15 +1211,21 @@ function loadCachedUserData() {
 
 function saveUserDataToCache() {
   try {
-    if (state.username) localStorage.setItem("echorooms_username", state.username);
-    if (state.selectedAvatar) localStorage.setItem("echorooms_avatar", state.selectedAvatar);
+    if (state.username) {
+      localStorage.setItem("movienight_username", state.username);
+      localStorage.setItem("echorooms_username", state.username);
+    }
+    if (state.selectedAvatar) {
+      localStorage.setItem("movienight_avatar", state.selectedAvatar);
+      localStorage.setItem("echorooms_avatar", state.selectedAvatar);
+    }
   } catch (e) {}
 }
 
 // ============================================================
 // Room Session Persistence (Page Refresh Recovery)
 // ============================================================
-const SESSION_KEY = "echorooms_session_v1";
+const SESSION_KEY = "movienight_session_v1";
 
 function saveRoomSession() {
   if (!state.roomId || !state.username) return;
@@ -1981,8 +1995,8 @@ function inviteUser() {
   const link = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(state.roomId)}`;
   if (navigator.share) {
     navigator.share({
-      title: "Join Echo Room",
-      text: `Join my Echo Room with code: ${state.roomId}`,
+      title: "Join MovieNight Room",
+      text: `Join my MovieNight room with code: ${state.roomId}`,
       url: link,
     }).then(() => showToast("Invite link shared!", "success"))
       .catch(() => copyRoomLinkToClipboard());
@@ -2804,7 +2818,7 @@ function stopScreenShare() {
     }
     if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
     if (document.getElementById("nowShowing")) {
-      document.getElementById("nowShowing").textContent = "STANDBY — NOTHING SCREENING";
+      document.getElementById("nowShowing").textContent = "MOVIENIGHT — NOTHING SCREENING";
     }
 
     broadcastToPeers({ type: "screen_share_stop", userId: state.userId });
@@ -2828,7 +2842,7 @@ function handleScreenShareStop() {
   }
   if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "STANDBY — NOTHING SCREENING";
+    document.getElementById("nowShowing").textContent = "MOVIENIGHT — NOTHING SCREENING";
   }
   if (state.movieMode) deactivateMovieMode();
   updateParticipantsUI();
@@ -3789,7 +3803,7 @@ function stopGroupVideo() {
   if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
   if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "STANDBY — NOTHING SCREENING";
+    document.getElementById("nowShowing").textContent = "MOVIENIGHT — NOTHING SCREENING";
   }
 
   broadcastToPeers({ type: "group_video_stop", userId: state.userId });
@@ -3944,7 +3958,7 @@ function handleGroupVideoStop() {
   if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
   if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "STANDBY — NOTHING SCREENING";
+    document.getElementById("nowShowing").textContent = "MOVIENIGHT — NOTHING SCREENING";
   }
 
   if (state.movieMode) deactivateMovieMode();
@@ -4738,7 +4752,10 @@ function useCustomAvatar() {
     testImg.onload = function () {
       elements.avatars.forEach((a) => a.classList.remove("selected"));
       state.selectedAvatar = customUrl;
-      try { localStorage.setItem("echorooms_avatar", customUrl); } catch (e) {}
+      try {
+        localStorage.setItem("movienight_avatar", customUrl);
+        localStorage.setItem("echorooms_avatar", customUrl);
+      } catch (e) {}
       showToast("Custom avatar applied!", "success");
       elements.customAvatarUrlInput.style.borderColor = "var(--brand-500)";
       setTimeout(() => { elements.customAvatarUrlInput.style.borderColor = ""; }, 2000);

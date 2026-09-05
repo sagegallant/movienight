@@ -1,7 +1,7 @@
 {
-  "name": "temporary-chat-room",
+  "name": "movienight",
   "version": "1.0.0",
-  "description": "A temporary room-based chat application with WebRTC-based screen sharing",
+  "description": "MovieNight — P2P Watch Party & Virtual Screening Room in your browser with WebRTC",
   "main": "index.html",
   "scripts": {
     "start": "node server.js",
@@ -9,10 +9,27 @@
     "deploy:gh-pages": "gh-pages -d ."
   },
   "keywords": [
+    "movienight",
     "webrtc",
-    "chat",
+    "watch-party",
+    "p2p",
+    "peer-to-peer",
+    "video-streaming",
     "screen-sharing",
-    "temporary-room"
+    "peerjs",
+    "youtube-sync",
+    "video-synchronization",
+    "html5-video",
+    "group-video",
+    "browser-streaming",
+    "privacy-focused",
+    "zero-backend",
+    "movie-night",
+    "real-time",
+    "media-streaming",
+    "video-chat",
+    "decentralized",
+    "javascript"
   ],
   "author": "",
   "license": "MIT",
