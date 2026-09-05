@@ -2,6 +2,7 @@
 
 <div align="center">
 
+[![GitHub Release](https://img.shields.io/github/v/release/SageGallant/movienight?style=for-the-badge&logo=github&color=blue)](https://github.com/SageGallant/movienight/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 [![WebRTC](https://img.shields.io/badge/WebRTC-P2P%20Mesh-339933?style=for-the-badge&logo=webrtc&logoColor=white)](https://webrtc.org/)
 [![PeerJS](https://img.shields.io/badge/PeerJS-Signaling-red?style=for-the-badge)](https://peerjs.com/)
