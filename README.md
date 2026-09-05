@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 [![WebRTC](https://img.shields.io/badge/WebRTC-P2P%20Mesh-339933?style=for-the-badge&logo=webrtc&logoColor=white)](https://webrtc.org/)
 [![PeerJS](https://img.shields.io/badge/PeerJS-Signaling-red?style=for-the-badge)](https://peerjs.com/)
-[![Video Quality](https://img.shields.io/badge/Quality-Full%20HD%201080p-blue?style=for-the-badge)](https://github.com/SageGallant/WebRTC)
-[![Privacy](https://img.shields.io/badge/Privacy-Zero%20Backend-success?style=for-the-badge)](https://github.com/SageGallant/WebRTC)
-[![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen.svg?style=for-the-badge)](https://github.com/SageGallant/WebRTC/pulls)
+[![Video Quality](https://img.shields.io/badge/Quality-Full%20HD%201080p-blue?style=for-the-badge)](https://github.com/SageGallant/movienight)
+[![Privacy](https://img.shields.io/badge/Privacy-Zero%20Backend-success?style=for-the-badge)](https://github.com/SageGallant/movienight)
+[![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen.svg?style=for-the-badge)](https://github.com/SageGallant/movienight/pulls)
 
 <p align="center">
   <strong>Private, serverless peer-to-peer virtual screening room and watch party platform in your browser.</strong><br>
@@ -168,7 +168,7 @@ Most watch party tools (Discord, Teleparty, Zoom, Kast) force everyone through c
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/SageGallant/WebRTC.git movienight
+git clone https://github.com/SageGallant/movienight.git
 cd movienight
 ```
 
