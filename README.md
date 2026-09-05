@@ -331,5 +331,5 @@ Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
 ---
 
 <div align="center">
-  <sub>Built with ❤️ for movie lovers and privacy enthusiasts. If you find MovieNight helpful, please give it a ⭐ on GitHub!</sub>
+  <sub>Built with ❤️ for movie lovers and privacy enthusiasts. If you find MovieNight helpful, then please give it a ⭐ on GitHub!</sub>
 </div>
