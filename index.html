@@ -156,11 +156,7 @@
           </div>
 
           <div class="stage-top" id="stageTop">
-            <span class="badge live"><span class="live-dot"></span>LIVE</span>
             <span class="badge" id="screen-share-user">Someone is sharing</span>
-            <button class="btn tiny danger hidden" id="host-stop-screen-share-badge" style="margin-left:auto;pointer-events:auto;">
-              <i class="fas fa-ban"></i> STOP PARTICIPANT STREAM
-            </button>
           </div>
 
           <!-- Stage Empty Overlay -->
@@ -201,9 +197,6 @@
               <input type="range" id="tpVol" min="0" max="1" step="0.01" value="1">
             </div>
             <div class="tp-common">
-              <button class="iconbtn" id="stage-mic-btn" title="Unmute Microphone">
-                <i class="fas fa-microphone-slash"></i>
-              </button>
               <button class="iconbtn" id="stage-cam-btn" title="Turn Camera On">
                 <i class="fas fa-video-slash"></i>
               </button>
@@ -214,7 +207,7 @@
                 <i class="fas fa-stop"></i> STOP STREAM
               </button>
               <button class="btn tiny danger hidden" id="host-stop-screen-share">
-                <i class="fas fa-ban"></i> FORCE STOP (HOST)
+                <i class="fas fa-ban"></i> STOP PARTICIPANT STREAM
               </button>
               <button class="iconbtn" id="tpFsBtn" title="Fullscreen">
                 <i class="fas fa-expand"></i>

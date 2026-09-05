@@ -60,60 +60,128 @@ const state = {
 };
 
 // ============================================================
-// WebRTC SDP Bandwidth Munging (Protects Against High-Bitrate Choking)
+// WebRTC SDP Bandwidth Munging (Ensures High-Fidelity 1080p Quality)
 // ============================================================
 function mungeSdpBandwidth(sdp) {
   if (!sdp || typeof sdp !== "string") return sdp;
-  const lines = sdp.split("\r\n");
-  const newLines = [];
+  const lines = sdp.split(/\r?\n/);
+  const out = [];
+  let pendingB = null;
   let currentMedia = null;
+  let opusPt = null;
+  let videoPayloads = new Set();
+  let seenFmtp = new Set();
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.startsWith("m=video")) {
-      currentMedia = "video";
-      newLines.push(line);
-      newLines.push("b=AS:5000");      // 5 Mbps cap for video
-      newLines.push("b=TIAS:5000000");
-      continue;
-    } else if (line.startsWith("m=audio")) {
-      currentMedia = "audio";
-      newLines.push(line);
-      newLines.push("b=AS:128");       // 128 kbps cap for audio
-      newLines.push("b=TIAS:128000");
-      continue;
-    } else if (line.startsWith("m=")) {
-      currentMedia = null;
+  function flushMissingVideoFmtp() {
+    if (currentMedia === "video" && videoPayloads.size > 0) {
+      videoPayloads.forEach((pt) => {
+        if (!seenFmtp.has(pt)) {
+          out.push(`a=fmtp:${pt} x-google-min-bitrate=2500;x-google-start-bitrate=6000;x-google-max-bitrate=12000`);
+          seenFmtp.add(pt);
+        }
+      });
     }
-
-    if (currentMedia === "video" && (line.startsWith("b=AS:") || line.startsWith("b=TIAS:"))) {
-      continue; // Replace existing video bandwidth
-    }
-    if (currentMedia === "audio" && (line.startsWith("b=AS:") || line.startsWith("b=TIAS:"))) {
-      continue; // Replace existing audio bandwidth
-    }
-
-    newLines.push(line);
   }
 
-  return newLines.join("\r\n");
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.trim();
+    if (!line) continue;
+
+    if (line.startsWith("m=")) {
+      flushMissingVideoFmtp();
+      if (line.startsWith("m=video")) {
+        currentMedia = "video";
+        pendingB = ["b=AS:12000", "b=TIAS:12000000"];
+        videoPayloads = new Set();
+        seenFmtp = new Set();
+        const parts = line.split(" ").slice(3);
+        parts.forEach((pt) => { if (/^\d+$/.test(pt)) videoPayloads.add(pt); });
+      } else if (line.startsWith("m=audio")) {
+        currentMedia = "audio";
+        pendingB = ["b=AS:256", "b=TIAS:256000"];
+      } else {
+        currentMedia = null;
+        pendingB = null;
+      }
+      out.push(line);
+      continue;
+    }
+
+    // Skip any existing b= lines so we can inject our clean ones strictly after c=
+    if (currentMedia && (line.startsWith("b=AS:") || line.startsWith("b=TIAS:"))) {
+      continue;
+    }
+
+    // RFC 4566: b= lines MUST strictly follow the c= line
+    if (line.startsWith("c=")) {
+      out.push(line);
+      if (pendingB && pendingB.length) {
+        pendingB.forEach((b) => out.push(b));
+        pendingB = null;
+      }
+      continue;
+    }
+
+    // Detect opus payload
+    const opusMatch = line.match(/^a=rtpmap:(\d+)\s+opus\/48000/i);
+    if (opusMatch) opusPt = opusMatch[1];
+
+    // Intercept fmtp lines
+    if (line.startsWith("a=fmtp:")) {
+      const m = line.match(/^a=fmtp:(\d+)(.*)$/);
+      if (m) {
+        const pt = m[1];
+        seenFmtp.add(pt);
+        if (opusPt && pt === opusPt) {
+          out.push(line + ";stereo=1;sprop-stereo=1;maxaveragebitrate=256000;cbr=1");
+          continue;
+        }
+        if (currentMedia === "video" && videoPayloads.has(pt)) {
+          if (!line.includes("x-google-min-bitrate")) {
+            out.push(line + ";x-google-min-bitrate=2500;x-google-start-bitrate=6000;x-google-max-bitrate=12000");
+            continue;
+          }
+        }
+      }
+    }
+
+    out.push(line);
+  }
+
+  flushMissingVideoFmtp();
+  return out.join("\r\n") + "\r\n";
 }
 
 if (typeof window !== "undefined" && window.RTCPeerConnection) {
   const origSetLocalDesc = window.RTCPeerConnection.prototype.setLocalDescription;
   window.RTCPeerConnection.prototype.setLocalDescription = function (desc) {
     if (desc && desc.sdp) {
-      try { desc.sdp = mungeSdpBandwidth(desc.sdp); } catch (e) { console.warn("SDP munge error:", e); }
+      try {
+        const modifiedSdp = mungeSdpBandwidth(desc.sdp);
+        desc = (typeof RTCSessionDescription !== "undefined")
+          ? new RTCSessionDescription({ type: desc.type, sdp: modifiedSdp })
+          : { type: desc.type, sdp: modifiedSdp };
+      } catch (e) {
+        console.warn("SDP local munge error:", e);
+      }
     }
-    return origSetLocalDesc.apply(this, arguments);
+    return origSetLocalDesc.call(this, desc);
   };
 
   const origSetRemoteDesc = window.RTCPeerConnection.prototype.setRemoteDescription;
   window.RTCPeerConnection.prototype.setRemoteDescription = function (desc) {
     if (desc && desc.sdp) {
-      try { desc.sdp = mungeSdpBandwidth(desc.sdp); } catch (e) { console.warn("SDP munge error:", e); }
+      try {
+        const modifiedSdp = mungeSdpBandwidth(desc.sdp);
+        desc = (typeof RTCSessionDescription !== "undefined")
+          ? new RTCSessionDescription({ type: desc.type, sdp: modifiedSdp })
+          : { type: desc.type, sdp: modifiedSdp };
+      } catch (e) {
+        console.warn("SDP remote munge error:", e);
+      }
     }
-    return origSetRemoteDesc.apply(this, arguments);
+    return origSetRemoteDesc.call(this, desc);
   };
 }
 
@@ -261,12 +329,10 @@ const elements = {
   streamTypeIcon:       document.getElementById("stream-type-icon"),
   stopScreenShareBtn:   document.getElementById("stop-screen-share"),
   hostStopScreenShareBtn: document.getElementById("host-stop-screen-share"),
-  hostStopScreenShareBadge: document.getElementById("host-stop-screen-share-badge"),
   webcamGrid:           document.getElementById("webcam-grid"),
   webcamsLeft:          document.getElementById("webcams-left"),
   webcamsRight:         document.getElementById("webcams-right"),
   toggleWebcamsBtn:     document.getElementById("toggle-webcams-btn"),
-  stageMicBtn:          document.getElementById("stage-mic-btn"),
   stageCamBtn:          document.getElementById("stage-cam-btn"),
 
   // Quality control
@@ -326,7 +392,7 @@ function updateMediaControlsUI() {
     elements.toggleCameraBtn.style.color = isCamOn ? "var(--amber)" : "var(--ink2)";
   }
 
-  // Stage Transport Cam & Mic Buttons
+  // Stage Transport Cam Button
   const stageCamBtn = elements.stageCamBtn || document.getElementById("stage-cam-btn");
   if (stageCamBtn) {
     stageCamBtn.innerHTML = isCamOn 
@@ -335,16 +401,6 @@ function updateMediaControlsUI() {
     stageCamBtn.classList.toggle("active-action", isCamOn);
     stageCamBtn.title = isCamOn ? "Turn Camera Off" : "Turn Camera On";
     stageCamBtn.style.color = isCamOn ? "var(--amber)" : "var(--ink2)";
-  }
-
-  const stageMicBtn = elements.stageMicBtn || document.getElementById("stage-mic-btn");
-  if (stageMicBtn) {
-    stageMicBtn.innerHTML = isMicOn 
-      ? '<i class="fas fa-microphone"></i>' 
-      : '<i class="fas fa-microphone-slash"></i>';
-    stageMicBtn.classList.toggle("active-action", isMicOn);
-    stageMicBtn.title = isMicOn ? "Mute Microphone" : "Unmute Microphone";
-    stageMicBtn.style.color = isMicOn ? "var(--ok)" : "var(--ink2)";
   }
 
   // Local Webcam Tile In-Video Controls
@@ -860,11 +916,6 @@ function setupEventListeners() {
       if (state.screenShareUserId) hostForceStopScreenShare(state.screenShareUserId);
     });
   }
-  if (elements.hostStopScreenShareBadge) {
-    elements.hostStopScreenShareBadge.addEventListener("click", () => {
-      if (state.screenShareUserId) hostForceStopScreenShare(state.screenShareUserId);
-    });
-  }
   if (elements.toggleWebcamsBtn) {
     elements.toggleWebcamsBtn.addEventListener("click", () => {
       const grid = elements.webcamGrid;
@@ -921,9 +972,6 @@ function setupEventListeners() {
   }
   if (elements.stageCamBtn) {
     elements.stageCamBtn.addEventListener("click", toggleCamera);
-  }
-  if (elements.stageMicBtn) {
-    elements.stageMicBtn.addEventListener("click", toggleMic);
   }
 
   // Movie mode
@@ -1747,7 +1795,7 @@ function handlePeerConnection(conn) {
     conn.isConnectionOpen = true;
 
     if (state.screenShareStream) callPeerForScreenShare(conn.peer, state.screenShareStream);
-    if (state.groupVideoStream) callPeerForGroupVideo(conn.peer, state.groupVideoStream, "Video");
+    if (state.groupVideoStream) callPeerForGroupVideo(conn.peer, state.groupVideoStream, state.groupVideoTitle || "Video");
     if (state.webcamStream) callPeerForWebcam(conn.peer, state.webcamStream);
   });
 
@@ -2439,9 +2487,6 @@ function updateParticipantsUI() {
   if (elements.hostStopScreenShareBtn) {
     elements.hostStopScreenShareBtn.classList.toggle("hidden", !isNonHostPresenting);
   }
-  if (elements.hostStopScreenShareBadge) {
-    elements.hostStopScreenShareBadge.classList.toggle("hidden", !isNonHostPresenting);
-  }
 }
 
 // ============================================================
@@ -2588,7 +2633,19 @@ async function startScreenShare() {
   }
 
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        cursor: "always",
+        width: { ideal: 1920, max: 3840 },
+        height: { ideal: 1080, max: 2160 },
+        frameRate: { ideal: 30, max: 60 }
+      },
+      audio: false
+    });
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      try { videoTrack.contentHint = "detail"; } catch (e) {}
+    }
     state.screenShareStream = stream;
     state.screenShareUser = state.username;
     state.screenShareUserId = state.userId;
@@ -2628,7 +2685,40 @@ function callPeerForScreenShare(peerId, stream) {
     const mediaCall = state.peer.call(peerId, stream, {
       metadata: { type: "screen_share", userId: state.userId, username: state.username },
     });
-    if (mediaCall) state.screenShareCalls[peerId] = mediaCall;
+    if (mediaCall) {
+      state.screenShareCalls[peerId] = mediaCall;
+
+      const adjustSender = () => {
+        try {
+          const pc = mediaCall.peerConnection;
+          if (!pc) return;
+          pc.getSenders().forEach((sender) => {
+            if (sender.track && sender.track.kind === "video") {
+              try { sender.track.contentHint = "detail"; } catch (e) {}
+              const params = sender.getParameters();
+              if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+              params.encodings[0].maxBitrate = 12000000; // 12 Mbps for crystal clear 1080p stream
+              params.encodings[0].minBitrate = 2500000;
+              params.encodings[0].maxFramerate = 60;
+              params.degradationPreference = "maintain-resolution";
+              params.encodings[0].scaleResolutionDownBy = 1.0;
+              sender.setParameters(params).catch((e) => console.warn("screen sender.setParameters:", e));
+            }
+          });
+        } catch (e) {}
+      };
+
+      if (mediaCall.peerConnection) {
+        mediaCall.peerConnection.addEventListener("connectionstatechange", () => {
+          if (mediaCall.peerConnection.connectionState === "connected") {
+            adjustSender();
+          }
+        });
+      }
+      setTimeout(adjustSender, 100);
+      setTimeout(adjustSender, 500);
+      setTimeout(adjustSender, 1500);
+    }
   } catch (err) {
     console.error(`Error calling ${peerId} for screen share:`, err);
   }
@@ -3333,7 +3423,7 @@ function startGroupVideo(src, title, explicitEmbedInfo = null) {
           let stream = null;
           try {
             // Capture video stream for WebRTC
-            const rawStream = video.captureStream ? video.captureStream(30) : (video.mozCaptureStream ? video.mozCaptureStream(30) : null);
+            const rawStream = video.captureStream ? video.captureStream() : (video.mozCaptureStream ? video.mozCaptureStream() : null);
 
             // 1. Prefer native decoded audio track from captureStream (handles high bitrate, 5.1/7.1, 48kHz, AC3/DTS natively)
             let audioTrack = null;
@@ -3366,6 +3456,9 @@ function startGroupVideo(src, title, explicitEmbedInfo = null) {
 
             if (rawStream) {
               const videoTrack = rawStream.getVideoTracks()[0];
+              if (videoTrack) {
+                try { videoTrack.contentHint = "detail"; } catch (e) {}
+              }
               const combinedTracks = [videoTrack, audioTrack].filter(Boolean);
               combinedTracks.forEach((t) => { t.enabled = true; });
               stream = new MediaStream(combinedTracks);
@@ -3512,11 +3605,13 @@ function callPeerForGroupVideo(peerId, stream, title) {
           if (!pc) return;
           pc.getSenders().forEach((sender) => {
             if (sender.track && sender.track.kind === "video") {
+              try { sender.track.contentHint = "detail"; } catch (e) {}
               const params = sender.getParameters();
               if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-              params.encodings[0].maxBitrate = 4000000; // 4 Mbps cap for WebRTC stream
-              params.encodings[0].maxFramerate = 30;
-              params.degradationPreference = "maintain-framerate";
+              params.encodings[0].maxBitrate = 12000000; // 12 Mbps cap for crystal clear 1080p stream
+              params.encodings[0].minBitrate = 2500000; // 2.5 Mbps minimum to prevent WebRTC downscaling
+              params.encodings[0].maxFramerate = 60;
+              params.degradationPreference = "maintain-resolution"; // PRESERVES 1080p RESOLUTION! Never drops to 360p!
 
               const v = elements.screenShareVideo;
               const w = v ? (v.videoWidth || 0) : 0;
@@ -3525,14 +3620,14 @@ function callPeerForGroupVideo(peerId, stream, title) {
                 params.encodings[0].scaleResolutionDownBy = 2.0; // 4K -> 1080p
               } else if (w >= 2560 || h >= 1440) {
                 params.encodings[0].scaleResolutionDownBy = 1.5; // 1440p -> ~960p
-              } else if (w > 1920 || h > 1080) {
-                params.encodings[0].scaleResolutionDownBy = 1.25;
+              } else {
+                params.encodings[0].scaleResolutionDownBy = 1.0; // Keep full 1080p / 720p!
               }
               sender.setParameters(params).catch((e) => console.warn("sender.setParameters:", e));
             } else if (sender.track && sender.track.kind === "audio") {
               const params = sender.getParameters();
               if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-              params.encodings[0].maxBitrate = 128000; // 128 kbps audio
+              params.encodings[0].maxBitrate = 256000; // 256 kbps audio
               sender.setParameters(params).catch((e) => console.warn("audio sender.setParameters:", e));
             }
           });
