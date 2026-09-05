@@ -3,29 +3,50 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches:
-      - main # Change this to the name of your main branch if different
+      - main
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: "16"
+          node-version: "22"
           cache: "npm"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Validate syntax
+        run: node -c js/app.js server.js
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "."
 
       - name: Deploy to GitHub Pages
-        run: |
-          git config --global user.name "${{ github.actor }}"
-          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
-          npm run deploy:gh-pages
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        id: deployment
+        uses: actions/deploy-pages@v4
