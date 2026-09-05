@@ -16,6 +16,10 @@
   <em>Zero accounts. Zero tracking. Media travels straight from your computer to your friends.</em>
 </p>
 
+<p align="center">
+  <img src="assets/preview.jpg" alt="MovieNight — P2P Watch Party & Virtual Screening Room" width="100%" />
+</p>
+
 [**Explore Features**](#-key-features) • [**Architecture**](#-architecture--how-it-works) • [**Quickstart**](#-quickstart--local-development) • [**Deployment**](#-deployment-options) • [**Contributing**](#-contributing)
 
 </div>
