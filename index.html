@@ -123,6 +123,9 @@
       <span id="nowShowing">MOVIENIGHT — NOTHING SCREENING</span>
 
       <div style="display:flex;gap:8px;align-items:center">
+        <span id="room-seats-badge" class="seats-badge">Seats: 1/6</span>
+        <span id="network-quality-badge" class="quality-badge quality-excellent" title="WebRTC Diagnostics">🟢 P2P Active</span>
+
         <button class="btn tiny ghost" id="rip-invite-btn">
           <i class="fas fa-user-plus"></i> INVITE
         </button>
@@ -323,6 +326,21 @@
     </div>
   </div>
 
+  <!-- Joiner Rejected / Room Full Modal -->
+  <div id="join-rejected-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h3 class="modal-title" style="color:var(--red);"><i class="fas fa-ban"></i> Cannot Join Screening</h3>
+      <p id="join-rejected-reason" class="modal-desc" style="text-align:center;">This room is at full capacity (maximum 6 participants for optimal P2P performance).</p>
+      <button id="dismiss-join-rejected-btn" class="btn ghost" style="margin:16px auto 0;display:block;">RETURN TO LOBBY</button>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/room/limits.js"></script>
+  <script src="js/sync/syncEngine.js"></script>
+  <script src="js/webrtc/sdp.js"></script>
+  <script src="js/webrtc/stats.js"></script>
+  <script src="js/ui/diagnosticsUi.js"></script>
   <script src="js/app.js"></script>
 </body>
 

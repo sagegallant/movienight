@@ -8,11 +8,11 @@ const state = {
   userId: null,
   username: null,
   avatar: null,
-  connections: {},       // active peer connections
-  participants: {},      // participant info by userId
+  connections: {}, // active peer connections
+  participants: {}, // participant info by userId
   isRoomCreator: false,
   screenShareStream: null,
-  screenShareCalls: {},  // media calls for screen sharing
+  screenShareCalls: {}, // media calls for screen sharing
   screenShareUser: null,
   screenShareUserId: null,
   isDarkMode: false,
@@ -60,130 +60,18 @@ const state = {
 };
 
 // ============================================================
-// WebRTC SDP Bandwidth Munging (Ensures High-Fidelity 1080p Quality)
+// WebRTC SDP & Bandwidth Configuration (Delegates to js/webrtc/sdp.js)
 // ============================================================
-function mungeSdpBandwidth(sdp) {
-  if (!sdp || typeof sdp !== "string") return sdp;
-  const lines = sdp.split(/\r?\n/);
-  const out = [];
-  let pendingB = null;
-  let currentMedia = null;
-  let opusPt = null;
-  let videoPayloads = new Set();
-  let seenFmtp = new Set();
-
-  function flushMissingVideoFmtp() {
-    if (currentMedia === "video" && videoPayloads.size > 0) {
-      videoPayloads.forEach((pt) => {
-        if (!seenFmtp.has(pt)) {
-          out.push(`a=fmtp:${pt} x-google-min-bitrate=2500;x-google-start-bitrate=6000;x-google-max-bitrate=12000`);
-          seenFmtp.add(pt);
-        }
-      });
-    }
+function mungeSdpBandwidth(sdp, tierConfig) {
+  if (
+    window.SdpManager &&
+    typeof window.SdpManager.mungeSdpBandwidth === "function"
+  ) {
+    return window.SdpManager.mungeSdpBandwidth(sdp, tierConfig);
   }
-
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i];
-    const line = raw.trim();
-    if (!line) continue;
-
-    if (line.startsWith("m=")) {
-      flushMissingVideoFmtp();
-      if (line.startsWith("m=video")) {
-        currentMedia = "video";
-        pendingB = ["b=AS:12000", "b=TIAS:12000000"];
-        videoPayloads = new Set();
-        seenFmtp = new Set();
-        const parts = line.split(" ").slice(3);
-        parts.forEach((pt) => { if (/^\d+$/.test(pt)) videoPayloads.add(pt); });
-      } else if (line.startsWith("m=audio")) {
-        currentMedia = "audio";
-        pendingB = ["b=AS:256", "b=TIAS:256000"];
-      } else {
-        currentMedia = null;
-        pendingB = null;
-      }
-      out.push(line);
-      continue;
-    }
-
-    // Skip any existing b= lines so we can inject our clean ones strictly after c=
-    if (currentMedia && (line.startsWith("b=AS:") || line.startsWith("b=TIAS:"))) {
-      continue;
-    }
-
-    // RFC 4566: b= lines MUST strictly follow the c= line
-    if (line.startsWith("c=")) {
-      out.push(line);
-      if (pendingB && pendingB.length) {
-        pendingB.forEach((b) => out.push(b));
-        pendingB = null;
-      }
-      continue;
-    }
-
-    // Detect opus payload
-    const opusMatch = line.match(/^a=rtpmap:(\d+)\s+opus\/48000/i);
-    if (opusMatch) opusPt = opusMatch[1];
-
-    // Intercept fmtp lines
-    if (line.startsWith("a=fmtp:")) {
-      const m = line.match(/^a=fmtp:(\d+)(.*)$/);
-      if (m) {
-        const pt = m[1];
-        seenFmtp.add(pt);
-        if (opusPt && pt === opusPt) {
-          out.push(line + ";stereo=1;sprop-stereo=1;maxaveragebitrate=256000;cbr=1");
-          continue;
-        }
-        if (currentMedia === "video" && videoPayloads.has(pt)) {
-          if (!line.includes("x-google-min-bitrate")) {
-            out.push(line + ";x-google-min-bitrate=2500;x-google-start-bitrate=6000;x-google-max-bitrate=12000");
-            continue;
-          }
-        }
-      }
-    }
-
-    out.push(line);
-  }
-
-  flushMissingVideoFmtp();
-  return out.join("\r\n") + "\r\n";
+  return sdp;
 }
 
-if (typeof window !== "undefined" && window.RTCPeerConnection) {
-  const origSetLocalDesc = window.RTCPeerConnection.prototype.setLocalDescription;
-  window.RTCPeerConnection.prototype.setLocalDescription = function (desc) {
-    if (desc && desc.sdp) {
-      try {
-        const modifiedSdp = mungeSdpBandwidth(desc.sdp);
-        desc = (typeof RTCSessionDescription !== "undefined")
-          ? new RTCSessionDescription({ type: desc.type, sdp: modifiedSdp })
-          : { type: desc.type, sdp: modifiedSdp };
-      } catch (e) {
-        console.warn("SDP local munge error:", e);
-      }
-    }
-    return origSetLocalDesc.call(this, desc);
-  };
-
-  const origSetRemoteDesc = window.RTCPeerConnection.prototype.setRemoteDescription;
-  window.RTCPeerConnection.prototype.setRemoteDescription = function (desc) {
-    if (desc && desc.sdp) {
-      try {
-        const modifiedSdp = mungeSdpBandwidth(desc.sdp);
-        desc = (typeof RTCSessionDescription !== "undefined")
-          ? new RTCSessionDescription({ type: desc.type, sdp: modifiedSdp })
-          : { type: desc.type, sdp: modifiedSdp };
-      } catch (e) {
-        console.warn("SDP remote munge error:", e);
-      }
-    }
-    return origSetRemoteDesc.call(this, desc);
-  };
-}
 
 // ============================================================
 // Dual-Channel YouTube Control Helper (API + PostMessage)
@@ -197,16 +85,20 @@ function sendYouTubeCommand(func, args = []) {
     }
   }
 
-  const iframe = document.getElementById("yt-player-target") ||
-                 document.querySelector("#group-video-player-container iframe") ||
-                 document.getElementById("group-video-player");
+  const iframe =
+    document.getElementById("yt-player-target") ||
+    document.querySelector("#group-video-player-container iframe") ||
+    document.getElementById("group-video-player");
   if (iframe && iframe.contentWindow) {
     try {
-      iframe.contentWindow.postMessage(JSON.stringify({
-        event: "command",
-        func: func,
-        args: args,
-      }), "*");
+      iframe.contentWindow.postMessage(
+        JSON.stringify({
+          event: "command",
+          func: func,
+          args: args,
+        }),
+        "*",
+      );
     } catch (e) {
       console.warn("postMessage to YT iframe error:", e);
     }
@@ -219,7 +111,9 @@ if (typeof window !== "undefined") {
     if (!event.data) return;
     let msg = null;
     if (typeof event.data === "string") {
-      try { msg = JSON.parse(event.data); } catch (e) {}
+      try {
+        msg = JSON.parse(event.data);
+      } catch (e) {}
     } else if (typeof event.data === "object") {
       msg = event.data;
     }
@@ -228,12 +122,24 @@ if (typeof window !== "undefined") {
     // Detect state changes from either "onStateChange" or "infoDelivery"
     let stateId = null;
     if (msg.event === "onStateChange") {
-      stateId = (typeof msg.info === "object" && msg.info !== null) ? msg.info.playerState : msg.info;
-    } else if (msg.event === "infoDelivery" && msg.info && typeof msg.info.playerState === "number") {
+      stateId =
+        typeof msg.info === "object" && msg.info !== null
+          ? msg.info.playerState
+          : msg.info;
+    } else if (
+      msg.event === "infoDelivery" &&
+      msg.info &&
+      typeof msg.info.playerState === "number"
+    ) {
       stateId = msg.info.playerState;
     }
 
-    if (msg.event === "infoDelivery" && msg.info && typeof msg.info.duration === "number" && msg.info.duration > 0) {
+    if (
+      msg.event === "infoDelivery" &&
+      msg.info &&
+      typeof msg.info.duration === "number" &&
+      msg.info.duration > 0
+    ) {
       state.groupVideoDuration = msg.info.duration;
     }
 
@@ -243,18 +149,28 @@ if (typeof window !== "undefined") {
 
       let curTime = 0;
       let dur = state.groupVideoDuration || 0;
-      if (state.ytPlayer && typeof state.ytPlayer.getCurrentTime === "function") {
-        try { curTime = state.ytPlayer.getCurrentTime() || 0; } catch (e) {}
+      if (
+        state.ytPlayer &&
+        typeof state.ytPlayer.getCurrentTime === "function"
+      ) {
+        try {
+          curTime = state.ytPlayer.getCurrentTime() || 0;
+        } catch (e) {}
       }
       if (state.ytPlayer && typeof state.ytPlayer.getDuration === "function") {
-        try { dur = state.ytPlayer.getDuration() || dur; } catch (e) {}
+        try {
+          dur = state.ytPlayer.getDuration() || dur;
+        } catch (e) {}
       }
 
-      const amHost = state.isRoomCreator ||
-        (state.participants[state.userId] && state.participants[state.userId].isCreator) ||
+      const amHost =
+        state.isRoomCreator ||
+        (state.participants[state.userId] &&
+          state.participants[state.userId].isCreator) ||
         (state.hostUserId && state.hostUserId === state.userId);
 
-      if (stateId === 1) { // PLAYING
+      if (stateId === 1) {
+        // PLAYING
         updateTransportPlayButton(true);
         state.groupVideoIsPlaying = true;
         if (state.isGroupVideoPresenter) {
@@ -275,7 +191,8 @@ if (typeof window !== "undefined") {
             timestamp: Date.now(),
           });
         }
-      } else if (stateId === 2) { // PAUSED
+      } else if (stateId === 2) {
+        // PAUSED
         updateTransportPlayButton(false);
         state.groupVideoIsPlaying = false;
         if (state.isGroupVideoPresenter) {
@@ -296,7 +213,8 @@ if (typeof window !== "undefined") {
             timestamp: Date.now(),
           });
         }
-      } else if (stateId === 0) { // ENDED
+      } else if (stateId === 0) {
+        // ENDED
         if (state.isGroupVideoPresenter) {
           stopGroupVideo();
         }
@@ -310,105 +228,109 @@ if (typeof window !== "undefined") {
 // ============================================================
 const elements = {
   // Screens
-  homeScreen:           document.getElementById("home-screen"),
-  chatRoom:             document.getElementById("chat-room"),
+  homeScreen: document.getElementById("home-screen"),
+  chatRoom: document.getElementById("chat-room"),
 
   // Home screen
-  usernameInput:        document.getElementById("username"),
-  roomIdInput:          document.getElementById("room-id"),
-  createRoomBtn:        document.getElementById("create-room-btn"),
-  joinRoomBtn:          document.getElementById("join-room-btn"),
-  refreshAvatarsBtn:    document.getElementById("refresh-avatars"),
-  customAvatarToggle:   document.getElementById("custom-avatar-toggle"),
-  customAvatarPanel:    document.getElementById("custom-avatar-panel"),
+  usernameInput: document.getElementById("username"),
+  roomIdInput: document.getElementById("room-id"),
+  createRoomBtn: document.getElementById("create-room-btn"),
+  joinRoomBtn: document.getElementById("join-room-btn"),
+  refreshAvatarsBtn: document.getElementById("refresh-avatars"),
+  customAvatarToggle: document.getElementById("custom-avatar-toggle"),
+  customAvatarPanel: document.getElementById("custom-avatar-panel"),
   customAvatarUrlInput: document.getElementById("custom-avatar-url"),
-  useCustomAvatarBtn:   document.getElementById("use-custom-avatar"),
-  avatars:              document.querySelectorAll(".avatar-opt"),
+  useCustomAvatarBtn: document.getElementById("use-custom-avatar"),
+  avatars: document.querySelectorAll(".avatar-opt"),
 
   // Room header
-  roomInfoBtn:          document.getElementById("room-info-btn"),
-  participantCount:     document.getElementById("participant-count"),
-  groupVideoBtn:        document.getElementById("group-video-btn"),
-  toggleCameraBtn:      document.getElementById("toggle-camera-btn"),
-  shareScreenBtn:       document.getElementById("share-screen-btn"),
-  movieModeBtn:         document.getElementById("movie-mode-btn"),
-  leaveRoomBtn:         document.getElementById("leave-room-btn"),
-  themeToggle:          document.getElementById("theme-toggle"),
-  themeToggleRoom:      document.getElementById("theme-toggle-room"),
+  roomInfoBtn: document.getElementById("room-info-btn"),
+  participantCount: document.getElementById("participant-count"),
+  groupVideoBtn: document.getElementById("group-video-btn"),
+  toggleCameraBtn: document.getElementById("toggle-camera-btn"),
+  shareScreenBtn: document.getElementById("share-screen-btn"),
+  movieModeBtn: document.getElementById("movie-mode-btn"),
+  leaveRoomBtn: document.getElementById("leave-room-btn"),
+  themeToggle: document.getElementById("theme-toggle"),
+  themeToggleRoom: document.getElementById("theme-toggle-room"),
 
   // Room info modal & participants
-  roomInfoModal:        document.getElementById("room-info-modal"),
-  roomInfoPanel:        document.getElementById("room-info-modal"),
-  roomInfoOverlay:      document.getElementById("room-info-modal"),
-  closeRoomInfoBtn:     document.getElementById("close-room-info-modal"),
+  roomInfoModal: document.getElementById("room-info-modal"),
+  roomInfoPanel: document.getElementById("room-info-modal"),
+  roomInfoOverlay: document.getElementById("room-info-modal"),
+  closeRoomInfoBtn: document.getElementById("close-room-info-modal"),
   closeRoomInfoModalBtn: document.getElementById("close-room-info-modal"),
-  ripRoomId:            document.getElementById("rip-room-id"),
-  modalRoomId:          document.getElementById("modal-room-id"),
-  modalPCount:          document.getElementById("modal-p-count"),
-  ripCopyIdBtn:         document.getElementById("rip-copy-id"),
-  ripInviteBtn:         document.getElementById("rip-invite-btn"),
-  ripModalInviteBtn:    document.getElementById("rip-modal-invite-btn"),
-  participantsList:     document.getElementById("modal-participants-list") || document.getElementById("participants-list"),
+  ripRoomId: document.getElementById("rip-room-id"),
+  modalRoomId: document.getElementById("modal-room-id"),
+  modalPCount: document.getElementById("modal-p-count"),
+  ripCopyIdBtn: document.getElementById("rip-copy-id"),
+  ripInviteBtn: document.getElementById("rip-invite-btn"),
+  ripModalInviteBtn: document.getElementById("rip-modal-invite-btn"),
+  participantsList:
+    document.getElementById("modal-participants-list") ||
+    document.getElementById("participants-list"),
 
   // Sidebar
-  participantsSidebar:  document.getElementById("participants-sidebar"),
-  sidebarParticipants:  document.getElementById("sidebar-participants-list"),
-  closeSidebarBtn:      document.getElementById("close-sidebar-btn"),
-  toggleSidebarBtn:     document.getElementById("toggle-sidebar-btn"),
+  participantsSidebar: document.getElementById("participants-sidebar"),
+  sidebarParticipants: document.getElementById("sidebar-participants-list"),
+  closeSidebarBtn: document.getElementById("close-sidebar-btn"),
+  toggleSidebarBtn: document.getElementById("toggle-sidebar-btn"),
 
   // Chat / messages
-  roomBody:             document.getElementById("room-body"),
-  messagesContainer:    document.getElementById("messages-container"),
-  messageInput:         document.getElementById("message-input"),
-  sendMessageBtn:       document.getElementById("send-message-btn"),
+  roomBody: document.getElementById("room-body"),
+  messagesContainer: document.getElementById("messages-container"),
+  messageInput: document.getElementById("message-input"),
+  sendMessageBtn: document.getElementById("send-message-btn"),
 
   // Screen share & Group video
   screenShareContainer: document.getElementById("screen-share-container"),
-  screenShareVideo:     document.getElementById("screen-share-video"),
-  screenShareUser:      document.getElementById("screen-share-user"),
-  streamTypeIcon:       document.getElementById("stream-type-icon"),
-  stopScreenShareBtn:   document.getElementById("stop-screen-share"),
+  screenShareVideo: document.getElementById("screen-share-video"),
+  screenShareUser: document.getElementById("screen-share-user"),
+  streamTypeIcon: document.getElementById("stream-type-icon"),
+  stopScreenShareBtn: document.getElementById("stop-screen-share"),
   hostStopScreenShareBtn: document.getElementById("host-stop-screen-share"),
-  webcamGrid:           document.getElementById("webcam-grid"),
-  webcamsLeft:          document.getElementById("webcams-left"),
-  webcamsRight:         document.getElementById("webcams-right"),
-  toggleWebcamsBtn:     document.getElementById("toggle-webcams-btn"),
-  stageCamBtn:          document.getElementById("stage-cam-btn"),
+  webcamGrid: document.getElementById("webcam-grid"),
+  webcamsLeft: document.getElementById("webcams-left"),
+  webcamsRight: document.getElementById("webcams-right"),
+  toggleWebcamsBtn: document.getElementById("toggle-webcams-btn"),
+  stageCamBtn: document.getElementById("stage-cam-btn"),
 
   // Quality control
-  qualityControl:       document.getElementById("quality-control"),
-  qualitySelect:        document.getElementById("quality-select"),
+  qualityControl: document.getElementById("quality-control"),
+  qualitySelect: document.getElementById("quality-select"),
 
   // Movie mode controls bar
-  movieControlsBar:     document.getElementById("movie-controls-bar"),
-  mmCamBtn:             document.getElementById("mm-cam-btn"),
-  mmMicBtn:             document.getElementById("mm-mic-btn"),
-  mmShareBtn:           document.getElementById("mm-share-btn"),
-  mmReactBtn:           document.getElementById("mm-react-btn"),
-  mmLeaveBtn:           document.getElementById("mm-leave-btn"),
-  reactionPicker:       document.getElementById("reaction-picker"),
-  reactionBtns:         document.querySelectorAll(".reaction-btn"),
+  movieControlsBar: document.getElementById("movie-controls-bar"),
+  mmCamBtn: document.getElementById("mm-cam-btn"),
+  mmMicBtn: document.getElementById("mm-mic-btn"),
+  mmShareBtn: document.getElementById("mm-share-btn"),
+  mmReactBtn: document.getElementById("mm-react-btn"),
+  mmLeaveBtn: document.getElementById("mm-leave-btn"),
+  reactionPicker: document.getElementById("reaction-picker"),
+  reactionBtns: document.querySelectorAll(".reaction-btn"),
 
   // Video source modal
-  videoSourceModal:            document.getElementById("video-source-modal"),
-  closeVideoModalBtn:          document.getElementById("close-video-modal"),
-  videoFileInput:              document.getElementById("video-file-input"),
-  playDeviceVideoBtn:          document.getElementById("play-device-video-btn"),
-  videoUrlInput:               document.getElementById("video-url-input"),
-  playUrlVideoBtn:             document.getElementById("play-url-video-btn"),
-  urlStreamFallbackBox:        document.getElementById("url-stream-fallback-box"),
-  modalShareScreenFallbackBtn: document.getElementById("modal-share-screen-fallback-btn"),
-  sampleBtns:                  document.querySelectorAll(".sample-btn"),
+  videoSourceModal: document.getElementById("video-source-modal"),
+  closeVideoModalBtn: document.getElementById("close-video-modal"),
+  videoFileInput: document.getElementById("video-file-input"),
+  playDeviceVideoBtn: document.getElementById("play-device-video-btn"),
+  videoUrlInput: document.getElementById("video-url-input"),
+  playUrlVideoBtn: document.getElementById("play-url-video-btn"),
+  urlStreamFallbackBox: document.getElementById("url-stream-fallback-box"),
+  modalShareScreenFallbackBtn: document.getElementById(
+    "modal-share-screen-fallback-btn",
+  ),
+  sampleBtns: document.querySelectorAll(".sample-btn"),
 
   // Join approval modals
-  joinRequestModal:     document.getElementById("join-request-modal"),
-  approvalUserAvatar:   document.getElementById("approval-user-avatar"),
-  approvalUserName:     document.getElementById("approval-user-name"),
-  approveJoinBtn:       document.getElementById("approve-join-btn"),
-  denyJoinBtn:          document.getElementById("deny-join-btn"),
+  joinRequestModal: document.getElementById("join-request-modal"),
+  approvalUserAvatar: document.getElementById("approval-user-avatar"),
+  approvalUserName: document.getElementById("approval-user-name"),
+  approveJoinBtn: document.getElementById("approve-join-btn"),
+  denyJoinBtn: document.getElementById("deny-join-btn"),
 
   // Join waiting modal
-  joinWaitingModal:     document.getElementById("join-waiting-modal"),
+  joinWaitingModal: document.getElementById("join-waiting-modal"),
   cancelJoinRequestBtn: document.getElementById("cancel-join-request-btn"),
 };
 
@@ -424,19 +346,24 @@ function updateMediaControlsUI() {
 
   // Header Camera Button
   if (elements.toggleCameraBtn) {
-    elements.toggleCameraBtn.innerHTML = isCamOn 
-      ? '<i class="fas fa-video"></i>' 
+    elements.toggleCameraBtn.innerHTML = isCamOn
+      ? '<i class="fas fa-video"></i>'
       : '<i class="fas fa-video-slash"></i>';
     elements.toggleCameraBtn.classList.toggle("active-action", isCamOn);
-    elements.toggleCameraBtn.title = isCamOn ? "Turn Camera Off" : "Turn Camera On";
-    elements.toggleCameraBtn.style.color = isCamOn ? "var(--amber)" : "var(--ink2)";
+    elements.toggleCameraBtn.title = isCamOn
+      ? "Turn Camera Off"
+      : "Turn Camera On";
+    elements.toggleCameraBtn.style.color = isCamOn
+      ? "var(--amber)"
+      : "var(--ink2)";
   }
 
   // Stage Transport Cam Button
-  const stageCamBtn = elements.stageCamBtn || document.getElementById("stage-cam-btn");
+  const stageCamBtn =
+    elements.stageCamBtn || document.getElementById("stage-cam-btn");
   if (stageCamBtn) {
-    stageCamBtn.innerHTML = isCamOn 
-      ? '<i class="fas fa-video"></i>' 
+    stageCamBtn.innerHTML = isCamOn
+      ? '<i class="fas fa-video"></i>'
       : '<i class="fas fa-video-slash"></i>';
     stageCamBtn.classList.toggle("active-action", isCamOn);
     stageCamBtn.title = isCamOn ? "Turn Camera Off" : "Turn Camera On";
@@ -446,8 +373,8 @@ function updateMediaControlsUI() {
   // Local Webcam Tile In-Video Controls
   const localCamBtn = document.getElementById("local-cam-toggle");
   if (localCamBtn) {
-    localCamBtn.innerHTML = isCamOn 
-      ? '<i class="fas fa-video"></i>' 
+    localCamBtn.innerHTML = isCamOn
+      ? '<i class="fas fa-video"></i>'
       : '<i class="fas fa-video-slash"></i>';
     localCamBtn.classList.toggle("active", isCamOn);
     localCamBtn.title = isCamOn ? "Turn Camera Off" : "Turn Camera On";
@@ -455,8 +382,8 @@ function updateMediaControlsUI() {
 
   const localMicBtn = document.getElementById("local-mic-toggle");
   if (localMicBtn) {
-    localMicBtn.innerHTML = isMicOn 
-      ? '<i class="fas fa-microphone"></i>' 
+    localMicBtn.innerHTML = isMicOn
+      ? '<i class="fas fa-microphone"></i>'
       : '<i class="fas fa-microphone-slash"></i>';
     localMicBtn.classList.toggle("active-mic", isMicOn);
     localMicBtn.title = isMicOn ? "Mute Microphone" : "Unmute Microphone";
@@ -464,11 +391,15 @@ function updateMediaControlsUI() {
 
   // Movie mode buttons
   if (elements.mmCamBtn) {
-    elements.mmCamBtn.innerHTML = isCamOn ? '<i class="fas fa-video"></i>' : '<i class="fas fa-video-slash"></i>';
+    elements.mmCamBtn.innerHTML = isCamOn
+      ? '<i class="fas fa-video"></i>'
+      : '<i class="fas fa-video-slash"></i>';
     elements.mmCamBtn.classList.toggle("active", isCamOn);
   }
   if (elements.mmMicBtn) {
-    elements.mmMicBtn.innerHTML = isMicOn ? '<i class="fas fa-microphone"></i>' : '<i class="fas fa-microphone-slash"></i>';
+    elements.mmMicBtn.innerHTML = isMicOn
+      ? '<i class="fas fa-microphone"></i>'
+      : '<i class="fas fa-microphone-slash"></i>';
     elements.mmMicBtn.classList.toggle("active", isMicOn);
   }
 }
@@ -477,6 +408,35 @@ function updateMediaControlsUI() {
 // Init
 // ============================================================
 function init() {
+  // Initialize diagnostics, quality HUD & TURN settings
+  if (window.DiagnosticsUi) {
+    window.diagnosticsUi = new window.DiagnosticsUi();
+    window.diagnosticsUi.init();
+  }
+
+  // Initialize synchronization engine
+  if (window.SyncEngine) {
+    state.syncEngine = new window.SyncEngine({ isHost: state.isRoomCreator });
+  }
+
+  // Initialize WebRTC stats monitor
+  if (window.StatsMonitor) {
+    state.statsMonitor = new window.StatsMonitor({
+      intervalMs: 2500,
+      onUpdate: (statsMap) => {
+        window.diagnosticsUi?.updateQuality(statsMap);
+      },
+    });
+    state.statsMonitor.start();
+  }
+
+  const dismissRejectBtn = document.getElementById("dismiss-join-rejected-btn");
+  if (dismissRejectBtn) {
+    dismissRejectBtn.onclick = () => {
+      document.getElementById("join-rejected-modal")?.classList.add("hidden");
+    };
+  }
+
   if (window.generateAvatarOptions) {
     window.generateAvatarOptions();
   }
@@ -496,7 +456,9 @@ function init() {
 // Code Boxes Auto-Advance
 // ============================================================
 function setupCodeBoxes() {
-  const boxes = [0, 1, 2, 3, 4, 5].map((i) => document.getElementById(`cb-${i}`)).filter(Boolean);
+  const boxes = [0, 1, 2, 3, 4, 5]
+    .map((i) => document.getElementById(`cb-${i}`))
+    .filter(Boolean);
   if (boxes.length === 0) return;
 
   function syncCodeToInput() {
@@ -586,7 +548,11 @@ function getActiveVideoDuration() {
         if (typeof d === "number" && Number.isFinite(d) && d > 0) return d;
       } catch (e) {}
     }
-    if (state.groupVideoDuration && Number.isFinite(state.groupVideoDuration) && state.groupVideoDuration > 0) {
+    if (
+      state.groupVideoDuration &&
+      Number.isFinite(state.groupVideoDuration) &&
+      state.groupVideoDuration > 0
+    ) {
       return state.groupVideoDuration;
     }
     return 0;
@@ -602,7 +568,11 @@ function getActiveVideoDuration() {
   }
 
   // If viewer (participant or host) watching stream from presenter:
-  if (state.groupVideoDuration && Number.isFinite(state.groupVideoDuration) && state.groupVideoDuration > 0) {
+  if (
+    state.groupVideoDuration &&
+    Number.isFinite(state.groupVideoDuration) &&
+    state.groupVideoDuration > 0
+  ) {
     return state.groupVideoDuration;
   }
 
@@ -620,10 +590,13 @@ function getActiveVideoCurrentTime() {
     if (state.ytPlayer && typeof state.ytPlayer.getCurrentTime === "function") {
       try {
         const cur = state.ytPlayer.getCurrentTime();
-        if (typeof cur === "number" && Number.isFinite(cur) && cur >= 0) return cur;
+        if (typeof cur === "number" && Number.isFinite(cur) && cur >= 0)
+          return cur;
       } catch (e) {}
     }
-    return Number.isFinite(state.groupVideoCurrentTime) ? Math.max(0, state.groupVideoCurrentTime) : 0;
+    return Number.isFinite(state.groupVideoCurrentTime)
+      ? Math.max(0, state.groupVideoCurrentTime)
+      : 0;
   }
 
   // If local presenter:
@@ -637,13 +610,17 @@ function getActiveVideoCurrentTime() {
   }
 
   // If viewer watching WebRTC stream (srcObject):
-  return Number.isFinite(state.groupVideoCurrentTime) ? Math.max(0, state.groupVideoCurrentTime) : 0;
+  return Number.isFinite(state.groupVideoCurrentTime)
+    ? Math.max(0, state.groupVideoCurrentTime)
+    : 0;
 }
 
 function updateTransportPlayButton(isPlaying) {
   const tpPlayBtn = document.getElementById("tpPlayBtn");
   if (tpPlayBtn) {
-    tpPlayBtn.innerHTML = isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
+    tpPlayBtn.innerHTML = isPlaying
+      ? '<i class="fas fa-pause"></i>'
+      : '<i class="fas fa-play"></i>';
     tpPlayBtn.title = isPlaying ? "Pause" : "Play";
   }
 }
@@ -660,14 +637,19 @@ function startTransportTicker() {
 
     if (tpCurTime) tpCurTime.textContent = fmtTransportTime(curTime);
     if (tpDurTime) {
-      tpDurTime.textContent = duration > 0 ? fmtTransportTime(duration) : "--:--";
+      tpDurTime.textContent =
+        duration > 0 ? fmtTransportTime(duration) : "--:--";
     }
     if (tpSeek && duration > 0 && !tpSeek.matches(":active")) {
       tpSeek.value = Math.min(1000, Math.max(0, (curTime / duration) * 1000));
     }
 
     // For non-presenters watching WebRTC stream: smoothly increment local playback offset between heartbeats if playing
-    if (!state.isGroupVideoPresenter && !state.groupVideoIsEmbed && state.groupVideoIsPlaying) {
+    if (
+      !state.isGroupVideoPresenter &&
+      !state.groupVideoIsEmbed &&
+      state.groupVideoIsPlaying
+    ) {
       state.groupVideoCurrentTime = (state.groupVideoCurrentTime || 0) + 0.25;
       if (duration > 0 && state.groupVideoCurrentTime > duration) {
         state.groupVideoCurrentTime = duration;
@@ -704,7 +686,8 @@ function setupTransportControls() {
       const tpDurTime = document.getElementById("tpDurTime");
 
       if (tpCurTime) tpCurTime.textContent = fmtTransportTime(curTime);
-      if (tpDurTime && duration > 0) tpDurTime.textContent = fmtTransportTime(duration);
+      if (tpDurTime && duration > 0)
+        tpDurTime.textContent = fmtTransportTime(duration);
       if (tpSeek && duration > 0 && !tpSeek.matches(":active")) {
         tpSeek.value = Math.min(1000, Math.max(0, (curTime / duration) * 1000));
       }
@@ -717,8 +700,15 @@ function setupTransportControls() {
       if (state.isGroupVideoPresenter) {
         if (state.groupVideoIsEmbed) {
           let isPlaying = false;
-          if (state.ytPlayer && typeof state.ytPlayer.getPlayerState === "function") {
-            try { isPlaying = state.ytPlayer.getPlayerState() === (window.YT?.PlayerState?.PLAYING ?? 1); } catch (e) {}
+          if (
+            state.ytPlayer &&
+            typeof state.ytPlayer.getPlayerState === "function"
+          ) {
+            try {
+              isPlaying =
+                state.ytPlayer.getPlayerState() ===
+                (window.YT?.PlayerState?.PLAYING ?? 1);
+            } catch (e) {}
           }
           const cur = getActiveVideoCurrentTime();
           const dur = getActiveVideoDuration();
@@ -757,7 +747,9 @@ function setupTransportControls() {
           const cur = getActiveVideoCurrentTime();
           const dur = getActiveVideoDuration();
           if (videoEl.paused) {
-            videoEl.play().catch((e) => console.warn("Play trigger notice:", e));
+            videoEl
+              .play()
+              .catch((e) => console.warn("Play trigger notice:", e));
             updateTransportPlayButton(true);
             state.groupVideoIsPlaying = true;
             broadcastToPeers({
@@ -788,14 +780,25 @@ function setupTransportControls() {
       }
 
       // 2. Room Host controlling video presented by another participant
-      const amHost = state.isRoomCreator || (state.participants[state.userId] && state.participants[state.userId].isCreator) || (state.hostUserId && state.hostUserId === state.userId);
+      const amHost =
+        state.isRoomCreator ||
+        (state.participants[state.userId] &&
+          state.participants[state.userId].isCreator) ||
+        (state.hostUserId && state.hostUserId === state.userId);
       if (amHost && state.screenShareUserId) {
         let isPaused = true;
         const currentTime = getActiveVideoCurrentTime();
 
         if (state.groupVideoIsEmbed) {
-          if (state.ytPlayer && typeof state.ytPlayer.getPlayerState === "function") {
-            try { isPaused = state.ytPlayer.getPlayerState() !== (window.YT?.PlayerState?.PLAYING ?? 1); } catch (e) {}
+          if (
+            state.ytPlayer &&
+            typeof state.ytPlayer.getPlayerState === "function"
+          ) {
+            try {
+              isPaused =
+                state.ytPlayer.getPlayerState() !==
+                (window.YT?.PlayerState?.PLAYING ?? 1);
+            } catch (e) {}
           }
         } else {
           isPaused = !state.groupVideoIsPlaying;
@@ -811,12 +814,22 @@ function setupTransportControls() {
           senderId: state.userId,
           timestamp: Date.now(),
         });
-        showToast(isPaused ? "Host resumed room playback ⏯" : "Host paused room playback ⏸", "info", 1500);
+        showToast(
+          isPaused
+            ? "Host resumed room playback ⏯"
+            : "Host paused room playback ⏸",
+          "info",
+          1500,
+        );
         return;
       }
 
       // 3. Regular participant
-      showToast("Only the streamer or room host can pause/play the video.", "info", 2000);
+      showToast(
+        "Only the streamer or room host can pause/play the video.",
+        "info",
+        2000,
+      );
     });
   }
 
@@ -848,7 +861,11 @@ function setupTransportControls() {
       }
 
       // Room Host controlling video presented by another participant
-      const amHost = state.isRoomCreator || (state.participants[state.userId] && state.participants[state.userId].isCreator) || (state.hostUserId && state.hostUserId === state.userId);
+      const amHost =
+        state.isRoomCreator ||
+        (state.participants[state.userId] &&
+          state.participants[state.userId].isCreator) ||
+        (state.hostUserId && state.hostUserId === state.userId);
       if (amHost && state.screenShareUserId) {
         state.groupVideoCurrentTime = targetTime;
         broadcastToPeers({
@@ -867,7 +884,9 @@ function setupTransportControls() {
       if (state.groupVideoIsEmbed) {
         let isMuted = false;
         if (state.ytPlayer && typeof state.ytPlayer.isMuted === "function") {
-          try { isMuted = state.ytPlayer.isMuted(); } catch (e) {}
+          try {
+            isMuted = state.ytPlayer.isMuted();
+          } catch (e) {}
         }
         if (isMuted) {
           sendYouTubeCommand("unMute");
@@ -895,9 +914,10 @@ function setupTransportControls() {
         if (vol === 0) sendYouTubeCommand("mute");
         else sendYouTubeCommand("unMute");
         if (tpMuteBtn) {
-          tpMuteBtn.innerHTML = vol === 0
-            ? '<i class="fas fa-volume-mute"></i>'
-            : '<i class="fas fa-volume-up"></i>';
+          tpMuteBtn.innerHTML =
+            vol === 0
+              ? '<i class="fas fa-volume-mute"></i>'
+              : '<i class="fas fa-volume-up"></i>';
         }
         return;
       }
@@ -934,11 +954,20 @@ function setupEventListeners() {
   elements.joinRoomBtn?.addEventListener("click", () => joinRoom());
   elements.refreshAvatarsBtn?.addEventListener("click", refreshAvatars);
   elements.useCustomAvatarBtn?.addEventListener("click", useCustomAvatar);
-  elements.customAvatarToggle?.addEventListener("click", toggleCustomAvatarPanel);
+  elements.customAvatarToggle?.addEventListener(
+    "click",
+    toggleCustomAvatarPanel,
+  );
   elements.usernameInput?.addEventListener("input", () => {
     try {
-      localStorage.setItem("movienight_username", elements.usernameInput.value.trim());
-      localStorage.setItem("echorooms_username", elements.usernameInput.value.trim());
+      localStorage.setItem(
+        "movienight_username",
+        elements.usernameInput.value.trim(),
+      );
+      localStorage.setItem(
+        "echorooms_username",
+        elements.usernameInput.value.trim(),
+      );
     } catch (e) {}
   });
   elements.roomIdInput?.addEventListener("keypress", (e) => {
@@ -958,7 +987,8 @@ function setupEventListeners() {
   });
   if (elements.hostStopScreenShareBtn) {
     elements.hostStopScreenShareBtn.addEventListener("click", () => {
-      if (state.screenShareUserId) hostForceStopScreenShare(state.screenShareUserId);
+      if (state.screenShareUserId)
+        hostForceStopScreenShare(state.screenShareUserId);
     });
   }
   if (elements.toggleWebcamsBtn) {
@@ -968,7 +998,11 @@ function setupEventListeners() {
         grid.classList.toggle("hidden");
         const isHidden = grid.classList.contains("hidden");
         elements.toggleWebcamsBtn.classList.toggle("active-action", !isHidden);
-        showToast(isHidden ? "Cameras hidden from stage" : "Cameras shown on stage", "info", 2000);
+        showToast(
+          isHidden ? "Cameras hidden from stage" : "Cameras shown on stage",
+          "info",
+          2000,
+        );
       }
     });
   }
@@ -987,10 +1021,16 @@ function setupEventListeners() {
     elements.groupVideoBtn.addEventListener("click", openVideoSourceModal);
   }
   if (elements.closeVideoModalBtn) {
-    elements.closeVideoModalBtn.addEventListener("click", closeVideoSourceModal);
+    elements.closeVideoModalBtn.addEventListener(
+      "click",
+      closeVideoSourceModal,
+    );
   }
   if (elements.playDeviceVideoBtn) {
-    elements.playDeviceVideoBtn.addEventListener("click", handleDeviceVideoSubmit);
+    elements.playDeviceVideoBtn.addEventListener(
+      "click",
+      handleDeviceVideoSubmit,
+    );
   }
   if (elements.playUrlVideoBtn) {
     elements.playUrlVideoBtn.addEventListener("click", handleUrlVideoSubmit);
@@ -1023,10 +1063,13 @@ function setupEventListeners() {
   elements.movieModeBtn?.addEventListener("click", toggleMovieMode);
 
   // Movie mode control bar buttons
-  if (elements.mmCamBtn) elements.mmCamBtn.addEventListener("click", toggleCamera);
+  if (elements.mmCamBtn)
+    elements.mmCamBtn.addEventListener("click", toggleCamera);
   if (elements.mmMicBtn) elements.mmMicBtn.addEventListener("click", toggleMic);
-  if (elements.mmShareBtn) elements.mmShareBtn.addEventListener("click", startScreenShare);
-  if (elements.mmLeaveBtn) elements.mmLeaveBtn.addEventListener("click", leaveRoom);
+  if (elements.mmShareBtn)
+    elements.mmShareBtn.addEventListener("click", startScreenShare);
+  if (elements.mmLeaveBtn)
+    elements.mmLeaveBtn.addEventListener("click", leaveRoom);
   if (elements.mmReactBtn) {
     elements.mmReactBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1044,7 +1087,8 @@ function setupEventListeners() {
   }
   // Close reaction picker on outside click
   document.addEventListener("click", () => {
-    if (elements.reactionPicker) elements.reactionPicker.classList.add("hidden");
+    if (elements.reactionPicker)
+      elements.reactionPicker.classList.add("hidden");
   });
 
   // Quality control for viewers
@@ -1077,7 +1121,10 @@ function setupEventListeners() {
     elements.denyJoinBtn.addEventListener("click", handleDenyJoin);
   }
   if (elements.cancelJoinRequestBtn) {
-    elements.cancelJoinRequestBtn.addEventListener("click", handleCancelJoinRequest);
+    elements.cancelJoinRequestBtn.addEventListener(
+      "click",
+      handleCancelJoinRequest,
+    );
   }
 }
 
@@ -1090,7 +1137,7 @@ function setupThemeToggle() {
     document.body.classList.toggle("light-mode", !dark);
     state.isDarkMode = dark;
     const icon = dark ? "fa-sun" : "fa-moon";
-    [elements.themeToggle, elements.themeToggleRoom].forEach(btn => {
+    [elements.themeToggle, elements.themeToggleRoom].forEach((btn) => {
       if (btn) btn.innerHTML = `<i class="fas ${icon}"></i>`;
     });
     try {
@@ -1099,7 +1146,7 @@ function setupThemeToggle() {
     } catch (e) {}
   }
 
-  [elements.themeToggle, elements.themeToggleRoom].forEach(btn => {
+  [elements.themeToggle, elements.themeToggleRoom].forEach((btn) => {
     if (btn) btn.addEventListener("click", () => applyTheme(!state.isDarkMode));
   });
 }
@@ -1110,7 +1157,9 @@ function setupThemeToggle() {
 function setupAvatarSelection() {
   const avatarOpts = document.querySelectorAll("img.avatar-opt");
   if (avatarOpts.length > 0) {
-    let selected = Array.from(avatarOpts).find((a) => a.classList.contains("selected"));
+    let selected = Array.from(avatarOpts).find((a) =>
+      a.classList.contains("selected"),
+    );
     if (!selected) {
       selected = avatarOpts[0];
       selected.classList.add("selected");
@@ -1123,7 +1172,9 @@ function setupAvatarSelection() {
     avatarStrip.addEventListener("click", (e) => {
       const avatar = e.target.closest("img.avatar-opt");
       if (!avatar) return;
-      document.querySelectorAll("img.avatar-opt").forEach((a) => a.classList.remove("selected"));
+      document
+        .querySelectorAll("img.avatar-opt")
+        .forEach((a) => a.classList.remove("selected"));
       avatar.classList.add("selected");
       state.selectedAvatar = avatar.getAttribute("data-avatar") || avatar.src;
       try {
@@ -1141,12 +1192,15 @@ function refreshAvatars() {
   setTimeout(() => {
     const avatarOpts = document.querySelectorAll("img.avatar-opt");
     if (avatarOpts.length > 0) {
-      let currentlySelected = Array.from(avatarOpts).find((a) => a.classList.contains("selected"));
+      let currentlySelected = Array.from(avatarOpts).find((a) =>
+        a.classList.contains("selected"),
+      );
       if (!currentlySelected) {
         currentlySelected = avatarOpts[0];
         currentlySelected.classList.add("selected");
       }
-      state.selectedAvatar = currentlySelected.getAttribute("data-avatar") || currentlySelected.src;
+      state.selectedAvatar =
+        currentlySelected.getAttribute("data-avatar") || currentlySelected.src;
     }
   }, 50);
 }
@@ -1157,7 +1211,10 @@ function refreshAvatars() {
 function toggleCustomAvatarPanel() {
   if (!elements.customAvatarPanel) return;
   elements.customAvatarPanel.classList.toggle("hidden");
-  if (!elements.customAvatarPanel.classList.contains("hidden") && elements.customAvatarUrlInput) {
+  if (
+    !elements.customAvatarPanel.classList.contains("hidden") &&
+    elements.customAvatarUrlInput
+  ) {
     elements.customAvatarUrlInput.focus();
   }
 }
@@ -1167,21 +1224,27 @@ function toggleCustomAvatarPanel() {
 // ============================================================
 function loadCachedUserData() {
   try {
-    const cachedUsername = localStorage.getItem("movienight_username") || localStorage.getItem("echorooms_username");
+    const cachedUsername =
+      localStorage.getItem("movienight_username") ||
+      localStorage.getItem("echorooms_username");
     if (cachedUsername && elements.usernameInput) {
       elements.usernameInput.value = cachedUsername;
       state.username = cachedUsername;
     }
-    const cachedTheme = localStorage.getItem("movienight_theme") || localStorage.getItem("echorooms_theme");
+    const cachedTheme =
+      localStorage.getItem("movienight_theme") ||
+      localStorage.getItem("echorooms_theme");
     if (cachedTheme === "dark") {
       document.body.classList.remove("light-mode");
       document.body.classList.add("dark-mode");
       state.isDarkMode = true;
-      [elements.themeToggle, elements.themeToggleRoom].forEach(btn => {
+      [elements.themeToggle, elements.themeToggleRoom].forEach((btn) => {
         if (btn) btn.innerHTML = '<i class="fas fa-sun"></i>';
       });
     }
-    const cachedAvatar = localStorage.getItem("movienight_avatar") || localStorage.getItem("echorooms_avatar");
+    const cachedAvatar =
+      localStorage.getItem("movienight_avatar") ||
+      localStorage.getItem("echorooms_avatar");
     if (cachedAvatar) {
       state.selectedAvatar = cachedAvatar;
       const avatarOpts = document.querySelectorAll("img.avatar-opt");
@@ -1195,8 +1258,13 @@ function loadCachedUserData() {
           avatar.classList.remove("selected");
         }
       });
-      if (!matchedPredefined && (cachedAvatar.startsWith("http://") || cachedAvatar.startsWith("https://"))) {
-        if (elements.customAvatarUrlInput) elements.customAvatarUrlInput.value = cachedAvatar;
+      if (
+        !matchedPredefined &&
+        (cachedAvatar.startsWith("http://") ||
+          cachedAvatar.startsWith("https://"))
+      ) {
+        if (elements.customAvatarUrlInput)
+          elements.customAvatarUrlInput.value = cachedAvatar;
         if (avatarOpts[0]) {
           avatarOpts[0].src = cachedAvatar;
           avatarOpts[0].setAttribute("data-avatar", cachedAvatar);
@@ -1236,14 +1304,16 @@ function saveRoomSession() {
       username: state.username,
       avatar: state.avatar || state.selectedAvatar,
       isRoomCreator: !!state.isRoomCreator,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(data));
   } catch (e) {}
 }
 
 function clearRoomSession() {
-  try { sessionStorage.removeItem(SESSION_KEY); } catch (e) {}
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch (e) {}
 }
 
 function getRoomSession() {
@@ -1293,7 +1363,8 @@ async function checkAndRestoreSession() {
 function resetJoinButton() {
   if (elements.joinRoomBtn) {
     elements.joinRoomBtn.disabled = false;
-    elements.joinRoomBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> JOIN THE ROOM';
+    elements.joinRoomBtn.innerHTML =
+      '<i class="fas fa-sign-in-alt"></i> JOIN THE ROOM';
   }
 }
 
@@ -1303,7 +1374,12 @@ function resetJoinButton() {
 function setupHeartbeat() {
   if (heartbeatInterval) clearInterval(heartbeatInterval);
   heartbeatInterval = setInterval(() => {
-    if (state.peer && state.peer.open && state.roomId && Object.keys(state.connections).length > 0) {
+    if (
+      state.peer &&
+      state.peer.open &&
+      state.roomId &&
+      Object.keys(state.connections).length > 0
+    ) {
       broadcastToPeers({ type: "heartbeat", timestamp: Date.now() });
       Object.entries(state.connections).forEach(([peerId, conn]) => {
         if (!conn.open) {
@@ -1319,7 +1395,9 @@ function setupHeartbeat() {
 // Validation
 // ============================================================
 async function validateUserInput() {
-  const username = elements.usernameInput ? elements.usernameInput.value.trim() : "";
+  const username = elements.usernameInput
+    ? elements.usernameInput.value.trim()
+    : "";
   if (!username) {
     showError("Please enter your name on the marquee");
     if (elements.usernameInput) elements.usernameInput.focus();
@@ -1328,10 +1406,13 @@ async function validateUserInput() {
 
   // Auto-fallback to selected or first avatar option if not explicitly clicked
   if (!state.selectedAvatar) {
-    const selectedImg = document.querySelector("img.avatar-opt.selected") || document.querySelector("img.avatar-opt");
+    const selectedImg =
+      document.querySelector("img.avatar-opt.selected") ||
+      document.querySelector("img.avatar-opt");
     if (selectedImg) {
       selectedImg.classList.add("selected");
-      state.selectedAvatar = selectedImg.getAttribute("data-avatar") || selectedImg.src;
+      state.selectedAvatar =
+        selectedImg.getAttribute("data-avatar") || selectedImg.src;
     }
   }
 
@@ -1353,7 +1434,11 @@ function showToast(message, type = "info", duration = 3000) {
   const container = document.getElementById("toast-container") || document.body;
   const toast = document.createElement("div");
   toast.className = `toast toast-${type}`;
-  const iconMap = { info: "fa-info-circle", success: "fa-check-circle", error: "fa-exclamation-circle" };
+  const iconMap = {
+    info: "fa-info-circle",
+    success: "fa-check-circle",
+    error: "fa-exclamation-circle",
+  };
   toast.innerHTML = `<i class="fas ${iconMap[type] || iconMap.info}"></i> <span>${message}</span>`;
   container.appendChild(toast);
   setTimeout(() => {
@@ -1362,17 +1447,22 @@ function showToast(message, type = "info", duration = 3000) {
   }, duration);
 }
 
-function showError(message) { showToast(message, "error"); }
+function showError(message) {
+  showToast(message, "error");
+}
 
 // ============================================================
 // Helpers
 // ============================================================
-function generateUserId() { return "user_" + uuid.v4(); }
+function generateUserId() {
+  return "user_" + uuid.v4();
+}
 
 function generateRoomId() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let result = "";
-  for (let i = 0; i < 6; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+  for (let i = 0; i < 6; i++)
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
   return result;
 }
 
@@ -1395,14 +1485,23 @@ async function createRoom() {
 async function joinRoom(targetRoomId = null) {
   if (!(await validateUserInput())) return;
 
-  let roomId = typeof targetRoomId === "string" && targetRoomId.trim() ? targetRoomId.trim() : "";
+  let roomId =
+    typeof targetRoomId === "string" && targetRoomId.trim()
+      ? targetRoomId.trim()
+      : "";
   if (!roomId) {
-    const boxes = [0, 1, 2, 3, 4, 5].map((i) => document.getElementById(`cb-${i}`)).filter(Boolean);
+    const boxes = [0, 1, 2, 3, 4, 5]
+      .map((i) => document.getElementById(`cb-${i}`))
+      .filter(Boolean);
     const boxVal = boxes.map((b) => b.value.trim()).join("");
-    roomId = boxVal || (elements.roomIdInput ? elements.roomIdInput.value.trim() : "");
+    roomId =
+      boxVal || (elements.roomIdInput ? elements.roomIdInput.value.trim() : "");
   }
   roomId = roomId.toUpperCase();
-  if (!roomId) { showError("Please enter a room ID"); return; }
+  if (!roomId) {
+    showError("Please enter a room ID");
+    return;
+  }
 
   // Immediately display waiting modal and disable join button for instant feedback
   if (elements.joinWaitingModal) {
@@ -1410,7 +1509,8 @@ async function joinRoom(targetRoomId = null) {
   }
   if (elements.joinRoomBtn) {
     elements.joinRoomBtn.disabled = true;
-    elements.joinRoomBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> JOINING...';
+    elements.joinRoomBtn.innerHTML =
+      '<i class="fas fa-spinner fa-spin"></i> JOINING...';
   }
 
   elements.messagesContainer.innerHTML = "";
@@ -1430,8 +1530,11 @@ function sendMessage() {
   const messageText = elements.messageInput.value.trim();
   if (!messageText) return;
   const message = {
-    userId: state.userId, username: state.username, avatar: state.avatar,
-    text: messageText, timestamp: new Date().toISOString(),
+    userId: state.userId,
+    username: state.username,
+    avatar: state.avatar,
+    text: messageText,
+    timestamp: new Date().toISOString(),
   };
   displayMessage(message, true);
   elements.messageInput.value = "";
@@ -1495,7 +1598,8 @@ function formatTime(date) {
 
 function scrollToBottom() {
   if (elements.messagesContainer) {
-    elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
+    elements.messagesContainer.scrollTop =
+      elements.messagesContainer.scrollHeight;
   }
 }
 
@@ -1503,16 +1607,23 @@ function scrollToBottom() {
 // PeerJS Init
 // ============================================================
 function initializePeer(peerId) {
-  const peerOptions = {
-    config: {
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:global.stun.twilio.com:3478" },
-      ],
-    },
-    debug: 2,
-  };
-  console.log("Initializing peer", peerId ? `with ID: ${peerId}` : "with random ID");
+  const peerOptions = window.MovieNightConfig
+    ? window.MovieNightConfig.buildPeerOptions({ debug: 2 })
+    : {
+        config: {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:global.stun.twilio.com:3478" },
+          ],
+        },
+        debug: 2,
+      };
+  console.log(
+    "Initializing peer",
+    peerId ? `with ID: ${peerId}` : "with random ID",
+    "using ICE servers:",
+    peerOptions?.config?.iceServers?.length || 0,
+  );
   try {
     if (state.peer) state.peer.destroy();
     state.peer = new Peer(peerId, peerOptions);
@@ -1525,10 +1636,22 @@ function initializePeer(peerId) {
         displayConnectionStatus("connected", "Room created successfully");
         addSelfToParticipants();
         Object.values(state.participants).forEach((participant) => {
-          if (participant.userId !== state.userId && participant.peerId && participant.peerId !== state.peerId) {
-            if (!state.connections[participant.peerId] || !state.connections[participant.peerId].open) {
+          if (
+            participant.userId !== state.userId &&
+            participant.peerId &&
+            participant.peerId !== state.peerId
+          ) {
+            if (
+              !state.connections[participant.peerId] ||
+              !state.connections[participant.peerId].open
+            ) {
               const conn = state.peer.connect(participant.peerId, {
-                metadata: { userId: state.userId, username: state.username, avatar: state.avatar, hostMigration: true },
+                metadata: {
+                  userId: state.userId,
+                  username: state.username,
+                  avatar: state.avatar,
+                  hostMigration: true,
+                },
               });
               handlePeerConnection(conn);
             }
@@ -1550,7 +1673,9 @@ function initializePeer(peerId) {
             broadcastNewParticipant(conn.metadata);
           }, 100);
         });
-        displaySystemMessage(`${conn.metadata.username} reconnected to the room`);
+        displaySystemMessage(
+          `${conn.metadata.username} reconnected to the room`,
+        );
         handlePeerConnection(conn);
         return;
       }
@@ -1576,21 +1701,31 @@ function initializePeer(peerId) {
           elements.screenShareContainer.classList.remove("hidden");
           elements.screenShareVideo.classList.remove("hidden");
           elements.screenShareVideo.srcObject = remoteStream;
-          if (elements.screenShareUser) elements.screenShareUser.textContent = state.screenShareUser;
-          if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
-          if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
+          if (elements.screenShareUser)
+            elements.screenShareUser.textContent = state.screenShareUser;
+          if (elements.streamTypeIcon)
+            elements.streamTypeIcon.className = "fas fa-desktop";
+          if (elements.stopScreenShareBtn)
+            elements.stopScreenShareBtn.classList.add("hidden");
           if (document.getElementById("nowShowing")) {
-            document.getElementById("nowShowing").textContent = "SCREENING — " + state.screenShareUser.toUpperCase();
+            document.getElementById("nowShowing").textContent =
+              "SCREENING — " + state.screenShareUser.toUpperCase();
           }
           if (!state.movieMode) activateMovieMode();
           updateParticipantsUI();
         });
         call.on("close", () => handleScreenShareStop());
-        call.on("error", (err) => { console.error("Screen share call error:", err); handleScreenShareStop(); });
+        call.on("error", (err) => {
+          console.error("Screen share call error:", err);
+          handleScreenShareStop();
+        });
       } else if (call.metadata && call.metadata.type === "group_video") {
         call.answer();
         call.on("stream", (remoteStream) => {
-          console.log("Received remote group video stream", remoteStream.getAudioTracks());
+          console.log(
+            "Received remote group video stream",
+            remoteStream.getAudioTracks(),
+          );
           state.screenShareUser = `${call.metadata?.username || "Host"} (streaming: ${call.metadata?.title || "Video"})`;
           state.screenShareUserId = call.metadata?.userId || null;
           document.getElementById("stageEmpty")?.classList.add("hidden");
@@ -1605,16 +1740,24 @@ function initializePeer(peerId) {
           if (vid.src) {
             const oldSrc = vid.src;
             vid.removeAttribute("src");
-            try { vid.load(); } catch (e) {}
+            try {
+              vid.load();
+            } catch (e) {}
             if (oldSrc.startsWith("blob:")) {
-              try { URL.revokeObjectURL(oldSrc); } catch (e) {}
+              try {
+                URL.revokeObjectURL(oldSrc);
+              } catch (e) {}
             }
           }
 
           // Enable all incoming audio and video tracks
-          remoteStream.getTracks().forEach((t) => { t.enabled = true; });
+          remoteStream.getTracks().forEach((t) => {
+            t.enabled = true;
+          });
           remoteStream.onaddtrack = () => {
-            remoteStream.getTracks().forEach((t) => { t.enabled = true; });
+            remoteStream.getTracks().forEach((t) => {
+              t.enabled = true;
+            });
           };
 
           vid.srcObject = remoteStream;
@@ -1622,25 +1765,42 @@ function initializePeer(peerId) {
           vid.muted = false;
 
           const startRemotePlayback = () => {
-            vid.play().then(() => {
-              console.log("Remote group video playing with audio!");
-            }).catch((err) => {
-              console.warn("Unmuted autoplay blocked by browser policy, muting and playing:", err);
-              vid.muted = true;
-              vid.play().then(() => {
-                showToast("Video playing! Click player to unmute audio 🔊", "info", 5000);
-                const unmuteOnClick = () => {
-                  vid.muted = false;
-                  showToast("Audio unmuted! 🔊", "success", 2000);
-                  vid.removeEventListener("click", unmuteOnClick);
-                };
-                vid.addEventListener("click", unmuteOnClick);
-              }).catch(e => console.error("Video play failed:", e));
-            });
+            vid
+              .play()
+              .then(() => {
+                console.log("Remote group video playing with audio!");
+              })
+              .catch((err) => {
+                console.warn(
+                  "Unmuted autoplay blocked by browser policy, muting and playing:",
+                  err,
+                );
+                vid.muted = true;
+                vid
+                  .play()
+                  .then(() => {
+                    showToast(
+                      "Video playing! Click player to unmute audio 🔊",
+                      "info",
+                      5000,
+                    );
+                    const unmuteOnClick = () => {
+                      vid.muted = false;
+                      showToast("Audio unmuted! 🔊", "success", 2000);
+                      vid.removeEventListener("click", unmuteOnClick);
+                    };
+                    vid.addEventListener("click", unmuteOnClick);
+                  })
+                  .catch((e) => console.error("Video play failed:", e));
+              });
           };
 
           startRemotePlayback();
-          if (call.metadata?.duration && Number.isFinite(call.metadata.duration) && call.metadata.duration > 0) {
+          if (
+            call.metadata?.duration &&
+            Number.isFinite(call.metadata.duration) &&
+            call.metadata.duration > 0
+          ) {
             state.groupVideoDuration = call.metadata.duration;
           }
           state.groupVideoIsPlaying = true;
@@ -1652,23 +1812,41 @@ function initializePeer(peerId) {
             tpDurTime.textContent = fmtTransportTime(state.groupVideoDuration);
           }
 
-          if (elements.screenShareUser) elements.screenShareUser.textContent = state.screenShareUser;
-          if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
-          if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
+          if (elements.screenShareUser)
+            elements.screenShareUser.textContent = state.screenShareUser;
+          if (elements.streamTypeIcon)
+            elements.streamTypeIcon.className = "fas fa-film";
+          if (elements.stopScreenShareBtn)
+            elements.stopScreenShareBtn.classList.add("hidden");
           if (document.getElementById("nowShowing")) {
-            document.getElementById("nowShowing").textContent = "SCREENING — " + (call.metadata?.title || "VIDEO").toUpperCase();
+            document.getElementById("nowShowing").textContent =
+              "SCREENING — " + (call.metadata?.title || "VIDEO").toUpperCase();
           }
           if (!state.movieMode) activateMovieMode();
-          showToast(`${call.metadata?.username || "Host"} started streaming a video! 🎬`, "info");
+          showToast(
+            `${call.metadata?.username || "Host"} started streaming a video! 🎬`,
+            "info",
+          );
           updateParticipantsUI();
         });
         call.on("close", () => handleGroupVideoStop());
-        call.on("error", (err) => { console.error("Group video call error:", err); handleGroupVideoStop(); });
+        call.on("error", (err) => {
+          console.error("Group video call error:", err);
+          handleGroupVideoStop();
+        });
       } else if (call.metadata && call.metadata.type === "webcam") {
         call.answer();
         call.on("stream", (remoteStream) => {
-          console.log("Received remote webcam stream from:", call.metadata?.username);
-          addWebcamTile(call.metadata?.userId, call.metadata?.username || "User", remoteStream, false);
+          console.log(
+            "Received remote webcam stream from:",
+            call.metadata?.username,
+          );
+          addWebcamTile(
+            call.metadata?.userId,
+            call.metadata?.username || "User",
+            remoteStream,
+            false,
+          );
         });
         call.on("close", () => {
           if (call.metadata?.userId) removeWebcamTile(call.metadata.userId);
@@ -1678,7 +1856,9 @@ function initializePeer(peerId) {
         call.answer();
         call.on("stream", (remoteStream) => {
           // Play remote audio
-          let audioEl = document.getElementById(`mic-audio-${call.metadata?.userId}`);
+          let audioEl = document.getElementById(
+            `mic-audio-${call.metadata?.userId}`,
+          );
           if (!audioEl) {
             audioEl = document.createElement("audio");
             audioEl.id = `mic-audio-${call.metadata?.userId}`;
@@ -1689,7 +1869,9 @@ function initializePeer(peerId) {
           audioEl.srcObject = remoteStream;
         });
         call.on("close", () => {
-          const audioEl = document.getElementById(`mic-audio-${call.metadata?.userId}`);
+          const audioEl = document.getElementById(
+            `mic-audio-${call.metadata?.userId}`,
+          );
           if (audioEl) audioEl.remove();
         });
       }
@@ -1700,15 +1882,30 @@ function initializePeer(peerId) {
       if (err.type === "peer-unavailable") {
         if (!state.isRoomCreator && (state.joinRetries || 0) < 6) {
           state.joinRetries = (state.joinRetries || 0) + 1;
-          displayConnectionStatus("connecting", `Connecting to room (${state.joinRetries}/6)...`);
-          setTimeout(() => { if (state.peer && !state.peer.destroyed) connectToPeer(state.roomId); }, 1000);
+          displayConnectionStatus(
+            "connecting",
+            `Connecting to room (${state.joinRetries}/6)...`,
+          );
+          setTimeout(() => {
+            if (state.peer && !state.peer.destroyed)
+              connectToPeer(state.roomId);
+          }, 1000);
           return;
         }
-        if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
-        displayConnectionStatus("error", "Room not found or no longer available");
-        showError("Room not found or no longer available. Please check the room ID and try again.");
+        if (elements.joinWaitingModal)
+          elements.joinWaitingModal.classList.add("hidden");
+        displayConnectionStatus(
+          "error",
+          "Room not found or no longer available",
+        );
+        showError(
+          "Room not found or no longer available. Please check the room ID and try again.",
+        );
       } else if (err.type === "network" || err.type === "server-error") {
-        displayConnectionStatus("error", "Network or server error, please try again");
+        displayConnectionStatus(
+          "error",
+          "Network or server error, please try again",
+        );
         setTimeout(() => {
           if (state.connectionStatus !== "connected") {
             displaySystemMessage("Attempting automatic reconnection...");
@@ -1724,7 +1921,9 @@ function initializePeer(peerId) {
             return;
           }
           displayConnectionStatus("error", "Room ID already in use");
-          showError("The room ID is currently unavailable. Please try creating a new room.");
+          showError(
+            "The room ID is currently unavailable. Please try creating a new room.",
+          );
           setTimeout(resetRoom, 2000);
         } else {
           initializePeer(); // Retry with random ID
@@ -1760,18 +1959,29 @@ function attemptPeerReconnect() {
 
   state.reconnectAttempts = (state.reconnectAttempts || 0) + 1;
   if (state.reconnectAttempts > 8) {
-    displayConnectionStatus("error", "Could not reconnect to room. Please check internet connection.");
+    displayConnectionStatus(
+      "error",
+      "Could not reconnect to room. Please check internet connection.",
+    );
     return;
   }
 
-  const delay = Math.min(1000 * Math.pow(1.5, state.reconnectAttempts - 1), 10000);
-  console.log(`Scheduling peer reconnect attempt #${state.reconnectAttempts} in ${delay}ms`);
+  const delay = Math.min(
+    1000 * Math.pow(1.5, state.reconnectAttempts - 1),
+    10000,
+  );
+  console.log(
+    `Scheduling peer reconnect attempt #${state.reconnectAttempts} in ${delay}ms`,
+  );
 
   state.reconnectTimer = setTimeout(() => {
     if (state.peer && !state.peer.destroyed) {
       try {
         state.peer.reconnect();
-        displayConnectionStatus("connecting", "Reconnecting to signaling server...");
+        displayConnectionStatus(
+          "connecting",
+          "Reconnecting to signaling server...",
+        );
         return;
       } catch (e) {
         console.warn("peer.reconnect failed:", e);
@@ -1812,7 +2022,7 @@ function connectToPeer(peerId) {
         joinRequest: !isRejoin,
         rejoin: isRejoin,
         peerId: state.peerId,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       },
       reliable: true,
       serialization: "json",
@@ -1820,8 +2030,14 @@ function connectToPeer(peerId) {
     if (conn) {
       handlePeerConnection(conn);
       setTimeout(() => {
-        if (state.connectionStatus !== "connected" && conn.peer === peerId && !conn.isConnectionOpen && !state.isJoinApproved) {
-          if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+        if (
+          state.connectionStatus !== "connected" &&
+          conn.peer === peerId &&
+          !conn.isConnectionOpen &&
+          !state.isJoinApproved
+        ) {
+          if (elements.joinWaitingModal)
+            elements.joinWaitingModal.classList.add("hidden");
           resetJoinButton();
           displayConnectionStatus("error", "Connection timeout");
           showError("Could not reach room host. Please check room code.");
@@ -1829,13 +2045,15 @@ function connectToPeer(peerId) {
         }
       }, 15000);
     } else {
-      if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+      if (elements.joinWaitingModal)
+        elements.joinWaitingModal.classList.add("hidden");
       resetJoinButton();
       showError("Failed to connect to the room");
     }
   } catch (error) {
     console.error("Error connecting to peer:", error);
-    if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+    if (elements.joinWaitingModal)
+      elements.joinWaitingModal.classList.add("hidden");
     resetJoinButton();
     showError("Connection error: " + error.message);
   }
@@ -1846,21 +2064,58 @@ function connectToPeer(peerId) {
 // ============================================================
 function handlePeerConnection(conn) {
   state.connections[conn.peer] = conn;
+
+  function attachMediaFeatures() {
+    if (conn.peerConnection) {
+      if (window.SdpManager) {
+        window.SdpManager.attachInstanceSdpMunging(conn.peerConnection);
+      }
+      if (state.statsMonitor) {
+        state.statsMonitor.track(conn.peer, conn.peerConnection);
+      }
+    }
+  }
+
+  attachMediaFeatures();
+
   conn.on("open", () => {
     console.log("Connected to peer:", conn.peer);
     conn.isConnectionOpen = true;
+    attachMediaFeatures();
 
-    if (state.screenShareStream) callPeerForScreenShare(conn.peer, state.screenShareStream);
-    if (state.groupVideoStream) callPeerForGroupVideo(conn.peer, state.groupVideoStream, state.groupVideoTitle || "Video");
+    // Exchange clock synchronization ping if host
+    if (state.syncEngine && state.isRoomCreator) {
+      try {
+        conn.send(state.syncEngine.createPing());
+      } catch (e) {}
+    }
+
+    if (state.screenShareStream)
+      callPeerForScreenShare(conn.peer, state.screenShareStream);
+    if (state.groupVideoStream)
+      callPeerForGroupVideo(
+        conn.peer,
+        state.groupVideoStream,
+        state.groupVideoTitle || "Video",
+      );
     if (state.webcamStream) callPeerForWebcam(conn.peer, state.webcamStream);
   });
 
   conn.on("data", (data) => handleIncomingData(conn, data));
-  conn.on("close", () => handlePeerDisconnect(conn.peer));
+  conn.on("close", () => {
+    if (state.statsMonitor) state.statsMonitor.untrack(conn.peer);
+    handlePeerDisconnect(conn.peer);
+  });
   conn.on("error", (err) => {
     console.error("Connection error with:", conn.peer, err);
-    if (conn.peer === state.roomId && !state.isRoomCreator && !state.isJoinApproved) {
-      if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+    if (state.statsMonitor) state.statsMonitor.untrack(conn.peer);
+    if (
+      conn.peer === state.roomId &&
+      !state.isRoomCreator &&
+      !state.isJoinApproved
+    ) {
+      if (elements.joinWaitingModal)
+        elements.joinWaitingModal.classList.add("hidden");
       showError("Connection error: " + err.message);
       resetRoom();
     }
@@ -1871,6 +2126,28 @@ function handlePeerConnection(conn) {
 // Join Approval Workflow (Host & Joiner)
 // ============================================================
 function queueJoinRequest(conn, metadata) {
+  // Check room capacity limit (P3, P22)
+  const currentCount = Object.keys(state.participants).length;
+  if (window.RoomLimits) {
+    const cap = window.RoomLimits.checkRoomCapacity(currentCount);
+    if (!cap.allowed) {
+      console.warn("Rejecting join request: room is full (max", cap.maxLimit, ")");
+      try {
+        conn.send(window.RoomLimits.createCapacityRejectionMessage(cap.maxLimit));
+        setTimeout(() => {
+          try {
+            conn.close();
+          } catch (e) {}
+        }, 300);
+      } catch (e) {}
+      showToast(
+        `${metadata?.username || "A guest"} was turned away: room is full (${cap.maxLimit} max).`,
+        "info",
+      );
+      return;
+    }
+  }
+
   state.pendingJoinRequests[conn.peer] = { conn, metadata };
   showNextJoinRequest();
 }
@@ -1878,17 +2155,25 @@ function queueJoinRequest(conn, metadata) {
 function showNextJoinRequest() {
   const peerIds = Object.keys(state.pendingJoinRequests);
   if (peerIds.length === 0) {
-    if (elements.joinRequestModal) elements.joinRequestModal.classList.add("hidden");
+    if (elements.joinRequestModal)
+      elements.joinRequestModal.classList.add("hidden");
     state.currentApprovalPeerId = null;
     return;
   }
   const peerId = peerIds[0];
   state.currentApprovalPeerId = peerId;
   const req = state.pendingJoinRequests[peerId];
-  if (elements.approvalUserAvatar) elements.approvalUserAvatar.src = req.metadata.avatar || "";
-  if (elements.approvalUserName) elements.approvalUserName.textContent = req.metadata.username || "User";
-  if (elements.joinRequestModal) elements.joinRequestModal.classList.remove("hidden");
-  showToast(`${req.metadata.username} requested to join the room 🔔`, "info", 5000);
+  if (elements.approvalUserAvatar)
+    elements.approvalUserAvatar.src = req.metadata.avatar || "";
+  if (elements.approvalUserName)
+    elements.approvalUserName.textContent = req.metadata.username || "User";
+  if (elements.joinRequestModal)
+    elements.joinRequestModal.classList.remove("hidden");
+  showToast(
+    `${req.metadata.username} requested to join the room 🔔`,
+    "info",
+    5000,
+  );
 }
 
 function handleApproveJoin() {
@@ -1898,9 +2183,18 @@ function handleApproveJoin() {
   delete state.pendingJoinRequests[peerId];
 
   conn.send({ type: "join_approved", hostUserId: state.userId });
-  if (metadata?.peerId && metadata.peerId !== state.peerId && !state.connections[metadata.peerId]) {
+  if (
+    metadata?.peerId &&
+    metadata.peerId !== state.peerId &&
+    !state.connections[metadata.peerId]
+  ) {
     const directConn = state.peer.connect(metadata.peerId, {
-      metadata: { userId: state.userId, username: state.username, avatar: state.avatar, joinRequest: false }
+      metadata: {
+        userId: state.userId,
+        username: state.username,
+        avatar: state.avatar,
+        joinRequest: false,
+      },
     });
     handlePeerConnection(directConn);
   }
@@ -1919,9 +2213,14 @@ function handleDenyJoin() {
   const { conn, metadata } = state.pendingJoinRequests[peerId];
   delete state.pendingJoinRequests[peerId];
 
-  conn.send({ type: "join_rejected", reason: "Host declined your request to join." });
+  conn.send({
+    type: "join_rejected",
+    reason: "Host declined your request to join.",
+  });
   setTimeout(() => {
-    try { conn.close(); } catch (e) {}
+    try {
+      conn.close();
+    } catch (e) {}
   }, 500);
 
   showToast(`Declined request from ${metadata.username}.`, "info");
@@ -1929,13 +2228,15 @@ function handleDenyJoin() {
 }
 
 function handleCancelJoinRequest() {
-  if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+  if (elements.joinWaitingModal)
+    elements.joinWaitingModal.classList.add("hidden");
   showToast("Join request cancelled.", "info");
   resetRoom();
 }
 
 function handleJoinApproved(data) {
-  if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+  if (elements.joinWaitingModal)
+    elements.joinWaitingModal.classList.add("hidden");
   state.isJoinApproved = true;
   saveRoomSession();
   displayRoom();
@@ -1945,8 +2246,22 @@ function handleJoinApproved(data) {
 }
 
 function handleJoinRejected(data) {
-  if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
-  showError(data.reason || "Your request to join was declined by the room host.");
+  if (elements.joinWaitingModal)
+    elements.joinWaitingModal.classList.add("hidden");
+
+  const rejectModal = document.getElementById("join-rejected-modal");
+  const reasonEl = document.getElementById("join-rejected-reason");
+  const message =
+    data.message ||
+    data.reason ||
+    "Your request to join was declined by the room host.";
+
+  if (rejectModal && reasonEl) {
+    reasonEl.textContent = message;
+    rejectModal.classList.remove("hidden");
+  } else {
+    showError(message);
+  }
   resetRoom();
 }
 
@@ -1958,7 +2273,9 @@ function hostKickUser(userId, username) {
   broadcastToPeers({ type: "remove_user", targetUserId: userId });
   const participant = state.participants[userId];
   if (participant && state.connections[participant.peerId]) {
-    try { state.connections[participant.peerId].close(); } catch (e) {}
+    try {
+      state.connections[participant.peerId].close();
+    } catch (e) {}
     delete state.connections[participant.peerId];
   }
   handleParticipantLeft(userId);
@@ -1994,11 +2311,13 @@ function handleForceStopScreenShare(data) {
 function inviteUser() {
   const link = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(state.roomId)}`;
   if (navigator.share) {
-    navigator.share({
-      title: "Join MovieNight Room",
-      text: `Join my MovieNight room with code: ${state.roomId}`,
-      url: link,
-    }).then(() => showToast("Invite link shared!", "success"))
+    navigator
+      .share({
+        title: "Join MovieNight Room",
+        text: `Join my MovieNight room with code: ${state.roomId}`,
+        url: link,
+      })
+      .then(() => showToast("Invite link shared!", "success"))
       .catch(() => copyRoomLinkToClipboard());
   } else {
     copyRoomLinkToClipboard();
@@ -2031,7 +2350,9 @@ function sendRoomInfo(conn) {
       videoId: state.groupVideoEmbed?.id || null,
       isUrl: !!state.groupVideoIsUrl,
       url: state.groupVideoUrl || null,
-      title: state.groupVideoTitle || (state.screenShareStream ? "Live Screen Share" : "Video"),
+      title:
+        state.groupVideoTitle ||
+        (state.screenShareStream ? "Live Screen Share" : "Video"),
       currentTime: curTime,
       duration: duration,
       paused: isPaused,
@@ -2044,7 +2365,10 @@ function sendRoomInfo(conn) {
   conn.send({
     type: "room_info",
     participants: state.participants,
-    screenShareActive: !!state.screenShareStream || !!state.groupVideoStream || !!state.groupVideoIsEmbed,
+    screenShareActive:
+      !!state.screenShareStream ||
+      !!state.groupVideoStream ||
+      !!state.groupVideoIsEmbed,
     screenShareUser: state.screenShareUser,
     activeScreening: activeScreening,
   });
@@ -2141,10 +2465,29 @@ function handleIncomingData(conn, data) {
       handleScreenShareStop();
       break;
     case "heartbeat":
-      conn.send({ type: "heartbeat_ack", timestamp: data.timestamp, received: Date.now() });
+      conn.send({
+        type: "heartbeat_ack",
+        timestamp: data.timestamp,
+        received: Date.now(),
+      });
       break;
-    case "heartbeat_ack": break;
-    default: console.log("Unknown data type:", data.type);
+    case "heartbeat_ack":
+      break;
+    case "clock_ping":
+      if (state.syncEngine) {
+        try {
+          const pong = state.syncEngine.createPong(data);
+          conn.send(pong);
+        } catch (e) {}
+      }
+      break;
+    case "clock_pong":
+      if (state.syncEngine) {
+        state.syncEngine.processPong(data);
+      }
+      break;
+    default:
+      console.log("Unknown data type:", data.type);
   }
 }
 
@@ -2152,23 +2495,44 @@ function handleRoomInfo(data, conn) {
   state.participants = data.participants;
   if (!state.participants[state.userId]) {
     state.participants[state.userId] = {
-      userId: state.userId, username: state.username, avatar: state.avatar, peerId: state.peerId,
+      userId: state.userId,
+      username: state.username,
+      avatar: state.avatar,
+      peerId: state.peerId,
     };
-    conn.send({ type: "new_participant", participant: state.participants[state.userId] });
+    conn.send({
+      type: "new_participant",
+      participant: state.participants[state.userId],
+    });
   }
 
   // Ensure full mesh connectivity: connect to all existing participants in the room
   Object.values(data.participants).forEach((p) => {
-    if (p.userId !== state.userId && p.peerId && p.peerId !== state.peerId && !state.connections[p.peerId]) {
+    if (
+      p.userId !== state.userId &&
+      p.peerId &&
+      p.peerId !== state.peerId &&
+      !state.connections[p.peerId]
+    ) {
       const peerConn = state.peer.connect(p.peerId, {
-        metadata: { userId: state.userId, username: state.username, avatar: state.avatar, joinRequest: false },
+        metadata: {
+          userId: state.userId,
+          username: state.username,
+          avatar: state.avatar,
+          joinRequest: false,
+        },
       });
       handlePeerConnection(peerConn);
     }
   });
 
   // Late-join active screening catchup
-  if (data.activeScreening && data.activeScreening.active && !state.isGroupVideoPresenter && !state.screenShareStream) {
+  if (
+    data.activeScreening &&
+    data.activeScreening.active &&
+    !state.isGroupVideoPresenter &&
+    !state.screenShareStream
+  ) {
     const scr = data.activeScreening;
     state.screenShareUser = scr.presenterUsername;
     state.screenShareUserId = scr.presenterUserId;
@@ -2180,14 +2544,20 @@ function handleRoomInfo(data, conn) {
     document.getElementById("stageEmpty")?.classList.add("hidden");
     document.getElementById("stageTop")?.classList.remove("hidden");
     document.getElementById("transport")?.classList.remove("hidden");
-    if (elements.screenShareUser) elements.screenShareUser.textContent = state.screenShareUser;
-    if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
+    if (elements.screenShareUser)
+      elements.screenShareUser.textContent = state.screenShareUser;
+    if (elements.stopScreenShareBtn)
+      elements.stopScreenShareBtn.classList.add("hidden");
     if (document.getElementById("nowShowing")) {
-      document.getElementById("nowShowing").textContent = "SCREENING — " + (scr.title || "VIDEO").toUpperCase();
+      document.getElementById("nowShowing").textContent =
+        "SCREENING — " + (scr.title || "VIDEO").toUpperCase();
     }
 
-    const transitSeconds = scr.timestamp ? Math.max(0, (Date.now() - scr.timestamp) / 1000) : 0;
-    const currentPosition = (scr.currentTime || 0) + (scr.paused ? 0 : transitSeconds);
+    const transitSeconds = scr.timestamp
+      ? Math.max(0, (Date.now() - scr.timestamp) / 1000)
+      : 0;
+    const currentPosition =
+      (scr.currentTime || 0) + (scr.paused ? 0 : transitSeconds);
     state.groupVideoCurrentTime = currentPosition;
     state.groupVideoIsPlaying = !scr.paused;
     updateTransportPlayButton(state.groupVideoIsPlaying);
@@ -2200,9 +2570,18 @@ function handleRoomInfo(data, conn) {
 
     if (scr.isEmbed) {
       state.groupVideoIsEmbed = true;
-      state.groupVideoEmbed = { type: scr.embedType, embedUrl: scr.embedUrl, id: scr.videoId, title: scr.title };
+      state.groupVideoEmbed = {
+        type: scr.embedType,
+        embedUrl: scr.embedUrl,
+        id: scr.videoId,
+        title: scr.title,
+      };
       if (scr.embedType === "youtube" && scr.videoId) {
-        loadYouTubePlayer(scr.videoId, { title: scr.title, initialTime: currentPosition, paused: scr.paused });
+        loadYouTubePlayer(scr.videoId, {
+          title: scr.title,
+          initialTime: currentPosition,
+          paused: scr.paused,
+        });
       } else if (scr.embedUrl) {
         loadGenericEmbedVideo(scr.embedUrl, scr.title, currentPosition);
       }
@@ -2217,10 +2596,14 @@ function handleRoomInfo(data, conn) {
         vid.src = scr.url;
         const applySync = () => {
           if (currentPosition > 0) {
-            try { vid.currentTime = currentPosition; } catch (e) {}
+            try {
+              vid.currentTime = currentPosition;
+            } catch (e) {}
           }
           if (scr.paused) {
-            try { vid.pause(); } catch (e) {}
+            try {
+              vid.pause();
+            } catch (e) {}
             updateTransportPlayButton(false);
           } else {
             vid.play().catch(() => {});
@@ -2234,9 +2617,11 @@ function handleRoomInfo(data, conn) {
         }
       }
     } else if (scr.isScreenShare) {
-      if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
+      if (elements.streamTypeIcon)
+        elements.streamTypeIcon.className = "fas fa-desktop";
     } else {
-      if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
+      if (elements.streamTypeIcon)
+        elements.streamTypeIcon.className = "fas fa-film";
     }
 
     if (!state.movieMode) activateMovieMode();
@@ -2248,9 +2633,17 @@ function handleRoomInfo(data, conn) {
 function handleNewParticipant(participant) {
   if (participant.userId !== state.userId) {
     state.participants[participant.userId] = participant;
-    if (!state.connections[participant.peerId] && participant.peerId !== state.peerId) {
+    if (
+      !state.connections[participant.peerId] &&
+      participant.peerId !== state.peerId
+    ) {
       const conn = state.peer.connect(participant.peerId, {
-        metadata: { userId: state.userId, username: state.username, avatar: state.avatar, joinRequest: false },
+        metadata: {
+          userId: state.userId,
+          username: state.username,
+          avatar: state.avatar,
+          joinRequest: false,
+        },
       });
       handlePeerConnection(conn);
     }
@@ -2266,8 +2659,10 @@ function handleParticipantLeft(userId) {
     delete state.participants[userId];
     updateParticipantsUI();
     displaySystemMessage(`${username} left the room`);
-    if ((state.screenShareUserId && state.screenShareUserId === userId) ||
-        (state.screenShareUser && state.screenShareUser === username)) {
+    if (
+      (state.screenShareUserId && state.screenShareUserId === userId) ||
+      (state.screenShareUser && state.screenShareUser === username)
+    ) {
       handleScreenShareStop();
       displaySystemMessage("Screen sharing ended (presenter left the room)");
     }
@@ -2278,12 +2673,15 @@ function handleParticipantLeft(userId) {
 }
 
 function handlePeerDisconnect(peerId) {
-  let disconnectedUserId = null, disconnectedUsername = null, wasHost = false;
+  let disconnectedUserId = null,
+    disconnectedUsername = null,
+    wasHost = false;
   for (const userId in state.participants) {
     if (state.participants[userId].peerId === peerId) {
       disconnectedUserId = userId;
       disconnectedUsername = state.participants[userId].username;
-      wasHost = !!state.participants[userId].isCreator || peerId === state.roomId;
+      wasHost =
+        !!state.participants[userId].isCreator || peerId === state.roomId;
       break;
     }
   }
@@ -2291,8 +2689,11 @@ function handlePeerDisconnect(peerId) {
     delete state.participants[disconnectedUserId];
     updateParticipantsUI();
     displaySystemMessage(`${disconnectedUsername} left the room`);
-    if ((state.screenShareUserId && state.screenShareUserId === disconnectedUserId) ||
-        (state.screenShareUser && state.screenShareUser === disconnectedUsername)) {
+    if (
+      (state.screenShareUserId &&
+        state.screenShareUserId === disconnectedUserId) ||
+      (state.screenShareUser && state.screenShareUser === disconnectedUsername)
+    ) {
       handleScreenShareStop();
       displaySystemMessage("Screen sharing ended (presenter left the room)");
     }
@@ -2305,7 +2706,9 @@ function handlePeerDisconnect(peerId) {
 }
 
 function electNewRoomCreator() {
-  const remaining = Object.values(state.participants).sort((a, b) => (a.joinTime || 0) - (b.joinTime || 0));
+  const remaining = Object.values(state.participants).sort(
+    (a, b) => (a.joinTime || 0) - (b.joinTime || 0),
+  );
   if (remaining.length > 0) {
     Object.values(state.participants).forEach((p) => (p.isCreator = false));
     const newHost = remaining[0];
@@ -2316,9 +2719,13 @@ function electNewRoomCreator() {
       saveRoomSession();
       showToast("The room host left. You are now the host! 👑", "info", 4000);
       displaySystemMessage("You are now the room host.");
-      
+
       // Instantly notify existing peers without closing mesh WebRTC connections
-      broadcastToPeers({ type: "host_update", hostUserId: state.userId, participants: state.participants });
+      broadcastToPeers({
+        type: "host_update",
+        hostUserId: state.userId,
+        participants: state.participants,
+      });
 
       // Claim the room code ID on the signaling broker in the background for new incoming joiners
       claimHostBrokerId(state.roomId);
@@ -2338,8 +2745,12 @@ function claimHostBrokerId(roomId) {
   function tryRegister() {
     if (!state.isRoomCreator || state.roomId !== roomId) return;
     if (state.hostBrokerPeer) {
-      try { state.hostBrokerPeer.disconnect(); } catch (e) {}
-      try { state.hostBrokerPeer.destroy(); } catch (e) {}
+      try {
+        state.hostBrokerPeer.disconnect();
+      } catch (e) {}
+      try {
+        state.hostBrokerPeer.destroy();
+      } catch (e) {}
       state.hostBrokerPeer = null;
     }
 
@@ -2360,7 +2771,11 @@ function claimHostBrokerId(roomId) {
     });
 
     broker.on("connection", (conn) => {
-      console.log("New incoming joiner connected to host broker:", conn.peer, conn.metadata);
+      console.log(
+        "New incoming joiner connected to host broker:",
+        conn.peer,
+        conn.metadata,
+      );
       // Auto-reconnect if session rejoin
       if (conn.metadata?.rejoin && state.isRoomCreator) {
         conn.on("open", () => {
@@ -2370,7 +2785,9 @@ function claimHostBrokerId(roomId) {
             broadcastNewParticipant(conn.metadata);
           }, 100);
         });
-        displaySystemMessage(`${conn.metadata.username} reconnected to the room`);
+        displaySystemMessage(
+          `${conn.metadata.username} reconnected to the room`,
+        );
         handlePeerConnection(conn);
         return;
       }
@@ -2382,22 +2799,39 @@ function claimHostBrokerId(roomId) {
     });
 
     broker.on("call", (call) => {
-      console.log("Incoming media call on host broker:", call.peer, call.metadata);
+      console.log(
+        "Incoming media call on host broker:",
+        call.peer,
+        call.metadata,
+      );
       call.answer();
       if (call.metadata?.type === "webcam") {
         call.on("stream", (remoteStream) => {
-          addWebcamTile(call.metadata?.userId, call.metadata?.username || "User", remoteStream, false);
+          addWebcamTile(
+            call.metadata?.userId,
+            call.metadata?.username || "User",
+            remoteStream,
+            false,
+          );
         });
       }
     });
 
     broker.on("error", (err) => {
       console.warn("Host broker registration notice:", err.type);
-      try { broker.disconnect(); } catch (e) {}
-      try { broker.destroy(); } catch (e) {}
+      try {
+        broker.disconnect();
+      } catch (e) {}
+      try {
+        broker.destroy();
+      } catch (e) {}
       state.hostBrokerPeer = null;
       attempts++;
-      if (state.isRoomCreator && (err.type === "unavailable-id" || err.type === "network") && attempts < maxAttempts) {
+      if (
+        state.isRoomCreator &&
+        (err.type === "unavailable-id" || err.type === "network") &&
+        attempts < maxAttempts
+      ) {
         setTimeout(tryRegister, 1000);
       }
     });
@@ -2447,10 +2881,18 @@ function updateParticipantsUI() {
   if (elements.participantCount) elements.participantCount.textContent = count;
   if (elements.modalPCount) elements.modalPCount.textContent = count;
   if (elements.ripRoomId) elements.ripRoomId.textContent = state.roomId || "——";
-  if (elements.modalRoomId) elements.modalRoomId.textContent = state.roomId || "——";
+  if (elements.modalRoomId)
+    elements.modalRoomId.textContent = state.roomId || "——";
+
+  // Update room seats capacity badge (P3, P22)
+  if (window.diagnosticsUi) {
+    window.diagnosticsUi.updateSeats(count, 6);
+  }
 
   // Update room info modal participants list with Host moderation actions
-  const pList = elements.participantsList || document.getElementById("modal-participants-list");
+  const pList =
+    elements.participantsList ||
+    document.getElementById("modal-participants-list");
   if (pList) {
     pList.innerHTML = "";
     participants.forEach((p) => {
@@ -2519,16 +2961,22 @@ function updateParticipantsUI() {
           const stopShareBtn = document.createElement("button");
           stopShareBtn.className = "iconbtn tiny";
           stopShareBtn.title = "Stop user screen share";
-          stopShareBtn.innerHTML = '<i class="fas fa-ban" style="color:var(--amber)"></i>';
-          stopShareBtn.addEventListener("click", () => hostForceStopScreenShare(p.userId));
+          stopShareBtn.innerHTML =
+            '<i class="fas fa-ban" style="color:var(--amber)"></i>';
+          stopShareBtn.addEventListener("click", () =>
+            hostForceStopScreenShare(p.userId),
+          );
           actionsDiv.appendChild(stopShareBtn);
         }
 
         const kickBtn = document.createElement("button");
         kickBtn.className = "iconbtn tiny";
         kickBtn.title = `Remove ${p.username} from room`;
-        kickBtn.innerHTML = '<i class="fas fa-user-minus" style="color:var(--red)"></i>';
-        kickBtn.addEventListener("click", () => hostKickUser(p.userId, p.username));
+        kickBtn.innerHTML =
+          '<i class="fas fa-user-minus" style="color:var(--red)"></i>';
+        kickBtn.addEventListener("click", () =>
+          hostKickUser(p.userId, p.username),
+        );
         actionsDiv.appendChild(kickBtn);
 
         li.appendChild(actionsDiv);
@@ -2539,9 +2987,15 @@ function updateParticipantsUI() {
   }
 
   // Update host stop button on active screen share overlay
-  const isNonHostPresenting = state.isRoomCreator && state.screenShareUserId && state.screenShareUserId !== state.userId;
+  const isNonHostPresenting =
+    state.isRoomCreator &&
+    state.screenShareUserId &&
+    state.screenShareUserId !== state.userId;
   if (elements.hostStopScreenShareBtn) {
-    elements.hostStopScreenShareBtn.classList.toggle("hidden", !isNonHostPresenting);
+    elements.hostStopScreenShareBtn.classList.toggle(
+      "hidden",
+      !isNonHostPresenting,
+    );
   }
 }
 
@@ -2550,7 +3004,8 @@ function updateParticipantsUI() {
 // ============================================================
 function openRoomInfoPanel() {
   if (elements.ripRoomId) elements.ripRoomId.textContent = state.roomId || "——";
-  if (elements.modalRoomId) elements.modalRoomId.textContent = state.roomId || "——";
+  if (elements.modalRoomId)
+    elements.modalRoomId.textContent = state.roomId || "——";
   updateParticipantsUI();
   if (elements.roomInfoModal) elements.roomInfoModal.classList.remove("hidden");
 }
@@ -2563,7 +3018,8 @@ function closeRoomInfoPanel() {
 // Sidebar (mobile)
 // ============================================================
 function toggleSidebar() {
-  const isOpen = elements.participantsSidebar.classList.contains("sidebar-open");
+  const isOpen =
+    elements.participantsSidebar.classList.contains("sidebar-open");
   isOpen ? closeSidebar() : openSidebar();
 }
 
@@ -2580,7 +3036,10 @@ function openSidebar() {
 
 function closeSidebar() {
   elements.participantsSidebar.classList.remove("sidebar-open");
-  if (sidebarOverlay) { sidebarOverlay.remove(); sidebarOverlay = null; }
+  if (sidebarOverlay) {
+    sidebarOverlay.remove();
+    sidebarOverlay = null;
+  }
 }
 
 // ============================================================
@@ -2601,17 +3060,28 @@ function activateMovieMode() {
   const screenShare = elements.screenShareContainer;
 
   // Ensure screen share container is visible if there is an active stream or video
-  if (screenShare && screenShare.classList.contains("hidden") && state.screenShareVideo && (state.screenShareVideo.srcObject || state.screenShareVideo.src)) {
+  if (
+    screenShare &&
+    screenShare.classList.contains("hidden") &&
+    state.screenShareVideo &&
+    (state.screenShareVideo.srcObject || state.screenShareVideo.src)
+  ) {
     screenShare.classList.remove("hidden");
   }
 
   // Show movie control bar & webcam grid row
-  if (elements.movieControlsBar) elements.movieControlsBar.classList.remove("hidden");
+  if (elements.movieControlsBar)
+    elements.movieControlsBar.classList.remove("hidden");
   if (elements.webcamGrid) elements.webcamGrid.classList.add("webcam-grid-row");
 
   // Show quality control for non-presenters
-  if (!state.isGroupVideoPresenter && !state.screenShareStream && elements.qualityControl) {
-    const hasRemoteStream = elements.screenShareVideo && elements.screenShareVideo.srcObject;
+  if (
+    !state.isGroupVideoPresenter &&
+    !state.screenShareStream &&
+    elements.qualityControl
+  ) {
+    const hasRemoteStream =
+      elements.screenShareVideo && elements.screenShareVideo.srcObject;
     if (hasRemoteStream) elements.qualityControl.classList.remove("hidden");
   }
 
@@ -2636,8 +3106,10 @@ function deactivateMovieMode() {
   if (movieChatPanel) movieChatPanel.remove();
 
   // Hide movie controls
-  if (elements.movieControlsBar) elements.movieControlsBar.classList.add("hidden");
-  if (elements.webcamGrid) elements.webcamGrid.classList.remove("webcam-grid-row");
+  if (elements.movieControlsBar)
+    elements.movieControlsBar.classList.add("hidden");
+  if (elements.webcamGrid)
+    elements.webcamGrid.classList.remove("webcam-grid-row");
   if (elements.qualityControl) elements.qualityControl.classList.add("hidden");
   if (elements.reactionPicker) elements.reactionPicker.classList.add("hidden");
 
@@ -2651,18 +3123,22 @@ function syncMmButtons() {
 
   if (state.webcamStream) {
     elements.mmCamBtn.classList.add("mm-active");
-    elements.mmCamBtn.innerHTML = '<i class="fas fa-video"></i><span>Cam</span>';
+    elements.mmCamBtn.innerHTML =
+      '<i class="fas fa-video"></i><span>Cam</span>';
   } else {
     elements.mmCamBtn.classList.remove("mm-active");
-    elements.mmCamBtn.innerHTML = '<i class="fas fa-video-slash"></i><span>Cam</span>';
+    elements.mmCamBtn.innerHTML =
+      '<i class="fas fa-video-slash"></i><span>Cam</span>';
   }
 
   if (state.isMicOn) {
     elements.mmMicBtn.classList.add("mm-active");
-    elements.mmMicBtn.innerHTML = '<i class="fas fa-microphone"></i><span>Mic</span>';
+    elements.mmMicBtn.innerHTML =
+      '<i class="fas fa-microphone"></i><span>Mic</span>';
   } else {
     elements.mmMicBtn.classList.remove("mm-active");
-    elements.mmMicBtn.innerHTML = '<i class="fas fa-microphone-slash"></i><span>Mic</span>';
+    elements.mmMicBtn.innerHTML =
+      '<i class="fas fa-microphone-slash"></i><span>Mic</span>';
   }
 
   if (state.screenShareStream || state.isGroupVideoPresenter) {
@@ -2672,18 +3148,23 @@ function syncMmButtons() {
   }
 }
 
-
-
 // ============================================================
 // Screen Share
 // ============================================================
 async function startScreenShare() {
-  const isOtherSharing = state.screenShareUserId && state.screenShareUserId !== state.userId;
+  const isOtherSharing =
+    state.screenShareUserId && state.screenShareUserId !== state.userId;
   if (isOtherSharing) {
-    showToast(`${state.screenShareUser || "Someone"} is currently presenting. They must stop first.`, "info");
+    showToast(
+      `${state.screenShareUser || "Someone"} is currently presenting. They must stop first.`,
+      "info",
+    );
     return;
   }
-  if (state.screenShareStream) { showToast("You are already sharing your screen.", "info"); return; }
+  if (state.screenShareStream) {
+    showToast("You are already sharing your screen.", "info");
+    return;
+  }
   if (state.isGroupVideoPresenter) {
     stopGroupVideo();
   }
@@ -2694,13 +3175,15 @@ async function startScreenShare() {
         cursor: "always",
         width: { ideal: 1920, max: 3840 },
         height: { ideal: 1080, max: 2160 },
-        frameRate: { ideal: 30, max: 60 }
+        frameRate: { ideal: 30, max: 60 },
       },
-      audio: false
+      audio: false,
     });
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
-      try { videoTrack.contentHint = "detail"; } catch (e) {}
+      try {
+        videoTrack.contentHint = "detail";
+      } catch (e) {}
     }
     state.screenShareStream = stream;
     state.screenShareUser = state.username;
@@ -2709,13 +3192,17 @@ async function startScreenShare() {
     document.getElementById("stageEmpty")?.classList.add("hidden");
     document.getElementById("stageTop")?.classList.remove("hidden");
     document.getElementById("transport")?.classList.remove("hidden");
-    if (elements.screenShareContainer) elements.screenShareContainer.classList.remove("hidden");
-    if (elements.screenShareVideo) elements.screenShareVideo.classList.remove("hidden");
+    if (elements.screenShareContainer)
+      elements.screenShareContainer.classList.remove("hidden");
+    if (elements.screenShareVideo)
+      elements.screenShareVideo.classList.remove("hidden");
     if (elements.screenShareVideo) elements.screenShareVideo.srcObject = stream;
     if (elements.screenShareUser) elements.screenShareUser.textContent = "You";
-    if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.remove("hidden");
+    if (elements.stopScreenShareBtn)
+      elements.stopScreenShareBtn.classList.remove("hidden");
     if (document.getElementById("nowShowing")) {
-      document.getElementById("nowShowing").textContent = "SCREENING — LIVE SCREEN SHARE";
+      document.getElementById("nowShowing").textContent =
+        "SCREENING — LIVE SCREEN SHARE";
     }
 
     Object.keys(state.connections).forEach((peerId) => {
@@ -2724,22 +3211,33 @@ async function startScreenShare() {
       }
     });
 
-    stream.getVideoTracks()[0].addEventListener("ended", () => stopScreenShare());
+    stream
+      .getVideoTracks()[0]
+      .addEventListener("ended", () => stopScreenShare());
 
-    broadcastToPeers({ type: "screen_share_start", username: state.username, userId: state.userId });
+    broadcastToPeers({
+      type: "screen_share_start",
+      username: state.username,
+      userId: state.userId,
+    });
 
     // Auto-activate movie mode for presenter
     if (!state.movieMode) activateMovieMode();
   } catch (err) {
     console.error("Error starting screen share:", err);
-    if (err.name !== "NotAllowedError") showError("Could not start screen sharing: " + err.message);
+    if (err.name !== "NotAllowedError")
+      showError("Could not start screen sharing: " + err.message);
   }
 }
 
 function callPeerForScreenShare(peerId, stream) {
   try {
     const mediaCall = state.peer.call(peerId, stream, {
-      metadata: { type: "screen_share", userId: state.userId, username: state.username },
+      metadata: {
+        type: "screen_share",
+        userId: state.userId,
+        username: state.username,
+      },
     });
     if (mediaCall) {
       state.screenShareCalls[peerId] = mediaCall;
@@ -2750,26 +3248,34 @@ function callPeerForScreenShare(peerId, stream) {
           if (!pc) return;
           pc.getSenders().forEach((sender) => {
             if (sender.track && sender.track.kind === "video") {
-              try { sender.track.contentHint = "detail"; } catch (e) {}
+              try {
+                sender.track.contentHint = "detail";
+              } catch (e) {}
               const params = sender.getParameters();
-              if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+              if (!params.encodings || params.encodings.length === 0)
+                params.encodings = [{}];
               params.encodings[0].maxBitrate = 12000000; // 12 Mbps for crystal clear 1080p stream
               params.encodings[0].minBitrate = 2500000;
               params.encodings[0].maxFramerate = 60;
               params.degradationPreference = "maintain-resolution";
               params.encodings[0].scaleResolutionDownBy = 1.0;
-              sender.setParameters(params).catch((e) => console.warn("screen sender.setParameters:", e));
+              sender
+                .setParameters(params)
+                .catch((e) => console.warn("screen sender.setParameters:", e));
             }
           });
         } catch (e) {}
       };
 
       if (mediaCall.peerConnection) {
-        mediaCall.peerConnection.addEventListener("connectionstatechange", () => {
-          if (mediaCall.peerConnection.connectionState === "connected") {
-            adjustSender();
-          }
-        });
+        mediaCall.peerConnection.addEventListener(
+          "connectionstatechange",
+          () => {
+            if (mediaCall.peerConnection.connectionState === "connected") {
+              adjustSender();
+            }
+          },
+        );
       }
       setTimeout(adjustSender, 100);
       setTimeout(adjustSender, 500);
@@ -2786,12 +3292,17 @@ function handleScreenShareStart(data) {
   document.getElementById("stageEmpty")?.classList.add("hidden");
   document.getElementById("stageTop")?.classList.remove("hidden");
   document.getElementById("transport")?.classList.remove("hidden");
-  if (elements.screenShareContainer) elements.screenShareContainer.classList.remove("hidden");
-  if (elements.screenShareVideo) elements.screenShareVideo.classList.remove("hidden");
-  if (elements.screenShareUser) elements.screenShareUser.textContent = data.username;
-  if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
+  if (elements.screenShareContainer)
+    elements.screenShareContainer.classList.remove("hidden");
+  if (elements.screenShareVideo)
+    elements.screenShareVideo.classList.remove("hidden");
+  if (elements.screenShareUser)
+    elements.screenShareUser.textContent = data.username;
+  if (elements.stopScreenShareBtn)
+    elements.stopScreenShareBtn.classList.add("hidden");
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "SCREENING — " + data.username.toUpperCase();
+    document.getElementById("nowShowing").textContent =
+      "SCREENING — " + data.username.toUpperCase();
   }
   displaySystemMessage(`${data.username} is sharing their screen`);
 }
@@ -2804,7 +3315,11 @@ function stopScreenShare() {
     state.screenShareUserId = null;
 
     Object.values(state.screenShareCalls).forEach((call) => {
-      try { call.close(); } catch (e) { console.error("Error closing screen share call:", e); }
+      try {
+        call.close();
+      } catch (e) {
+        console.error("Error closing screen share call:", e);
+      }
     });
     state.screenShareCalls = {};
 
@@ -2816,9 +3331,11 @@ function stopScreenShare() {
       elements.screenShareVideo.srcObject = null;
       elements.screenShareVideo.classList.add("hidden");
     }
-    if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
+    if (elements.stopScreenShareBtn)
+      elements.stopScreenShareBtn.classList.add("hidden");
     if (document.getElementById("nowShowing")) {
-      document.getElementById("nowShowing").textContent = "MOVIENIGHT — NOTHING SCREENING";
+      document.getElementById("nowShowing").textContent =
+        "MOVIENIGHT — NOTHING SCREENING";
     }
 
     broadcastToPeers({ type: "screen_share_stop", userId: state.userId });
@@ -2840,9 +3357,11 @@ function handleScreenShareStop() {
     elements.screenShareVideo.srcObject = null;
     elements.screenShareVideo.classList.add("hidden");
   }
-  if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
+  if (elements.stopScreenShareBtn)
+    elements.stopScreenShareBtn.classList.add("hidden");
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "MOVIENIGHT — NOTHING SCREENING";
+    document.getElementById("nowShowing").textContent =
+      "MOVIENIGHT — NOTHING SCREENING";
   }
   if (state.movieMode) deactivateMovieMode();
   updateParticipantsUI();
@@ -2852,28 +3371,40 @@ function handleScreenShareStop() {
 // Group Video Watching (File or URL)
 // ============================================================
 function openVideoSourceModal() {
-  const isOtherSharing = state.screenShareUserId && state.screenShareUserId !== state.userId;
+  const isOtherSharing =
+    state.screenShareUserId && state.screenShareUserId !== state.userId;
   if (isOtherSharing) {
-    showToast(`${state.screenShareUser || "Someone"} is currently presenting.`, "info");
+    showToast(
+      `${state.screenShareUser || "Someone"} is currently presenting.`,
+      "info",
+    );
     return;
   }
-  if (elements.videoSourceModal) elements.videoSourceModal.classList.remove("hidden");
+  if (elements.videoSourceModal)
+    elements.videoSourceModal.classList.remove("hidden");
 }
 
 function closeVideoSourceModal() {
-  if (elements.videoSourceModal) elements.videoSourceModal.classList.add("hidden");
+  if (elements.videoSourceModal)
+    elements.videoSourceModal.classList.add("hidden");
 }
 
 function handleDeviceVideoSubmit() {
   const file = elements.videoFileInput?.files?.[0];
-  if (!file) { showError("Please select a video file from your device."); return; }
+  if (!file) {
+    showError("Please select a video file from your device.");
+    return;
+  }
   const fileUrl = URL.createObjectURL(file);
   startGroupVideo(fileUrl, file.name.replace(/\.[^/.]+$/, ""));
 }
 
 function handleUrlVideoSubmit() {
   const url = elements.videoUrlInput?.value?.trim();
-  if (!url) { showError("Please enter a valid video URL."); return; }
+  if (!url) {
+    showError("Please enter a valid video URL.");
+    return;
+  }
 
   const classification = classifyMediaUrl(url);
 
@@ -2887,7 +3418,11 @@ function handleUrlVideoSubmit() {
   }
 
   if (classification.type === "embed") {
-    startGroupVideo(classification.embed.embedUrl, classification.embed.title, classification.embed);
+    startGroupVideo(
+      classification.embed.embedUrl,
+      classification.embed.title,
+      classification.embed,
+    );
   } else {
     startGroupVideo(url, "Online Video");
   }
@@ -2904,7 +3439,11 @@ function classifyMediaUrl(url) {
   }
 
   // 2. Direct media URLs: Any valid HTTP/HTTPS or blob/data URL
-  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("blob:") || trimmed.startsWith("data:")) {
+  if (
+    /^https?:\/\//i.test(trimmed) ||
+    trimmed.startsWith("blob:") ||
+    trimmed.startsWith("data:")
+  ) {
     return { type: "direct", url: trimmed };
   }
 
@@ -2916,7 +3455,9 @@ function detectEmbedSource(url) {
   const trimmed = url.trim();
 
   // YouTube: Standard watch, short youtu.be, embed, shorts, live
-  const ytMatch = trimmed.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/|live\/))([\w-]{11})/);
+  const ytMatch = trimmed.match(
+    /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/|live\/))([\w-]{11})/,
+  );
   if (ytMatch) {
     return {
       type: "youtube",
@@ -2948,7 +3489,9 @@ function detectEmbedSource(url) {
   }
 
   // Twitch Clips & Channels
-  const twitchClipMatch = trimmed.match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[\w-]+\/clip\/)([\w-]+)/i);
+  const twitchClipMatch = trimmed.match(
+    /(?:clips\.twitch\.tv\/|twitch\.tv\/[\w-]+\/clip\/)([\w-]+)/i,
+  );
   if (twitchClipMatch) {
     const parentHost = window.location.hostname || "localhost";
     return {
@@ -2970,7 +3513,9 @@ function detectEmbedSource(url) {
   }
 
   // Dailymotion
-  const dmMatch = trimmed.match(/(?:dailymotion\.com\/video\/|dai\.ly\/)([\w-]+)/i);
+  const dmMatch = trimmed.match(
+    /(?:dailymotion\.com\/video\/|dai\.ly\/)([\w-]+)/i,
+  );
   if (dmMatch) {
     return {
       type: "dailymotion",
@@ -3028,8 +3573,15 @@ function startPresenterHeartbeat() {
     let isPaused = false;
 
     if (state.groupVideoIsEmbed) {
-      if (state.ytPlayer && typeof state.ytPlayer.getPlayerState === "function") {
-        try { isPaused = state.ytPlayer.getPlayerState() !== (window.YT?.PlayerState?.PLAYING ?? 1); } catch (e) {}
+      if (
+        state.ytPlayer &&
+        typeof state.ytPlayer.getPlayerState === "function"
+      ) {
+        try {
+          isPaused =
+            state.ytPlayer.getPlayerState() !==
+            (window.YT?.PlayerState?.PLAYING ?? 1);
+        } catch (e) {}
       }
     } else if (elements.screenShareVideo) {
       isPaused = elements.screenShareVideo.paused;
@@ -3060,7 +3612,9 @@ function loadYouTubePlayer(videoId, options = {}) {
 
   if (elements.screenShareVideo) {
     elements.screenShareVideo.onerror = null;
-    try { elements.screenShareVideo.pause(); } catch (e) {}
+    try {
+      elements.screenShareVideo.pause();
+    } catch (e) {}
     elements.screenShareVideo.classList.add("hidden");
   }
 
@@ -3075,7 +3629,10 @@ function loadYouTubePlayer(videoId, options = {}) {
     container.style.zIndex = "1";
     if (elements.screenShareContainer) {
       elements.screenShareContainer.classList.remove("hidden");
-      elements.screenShareContainer.insertBefore(container, elements.screenShareContainer.firstChild);
+      elements.screenShareContainer.insertBefore(
+        container,
+        elements.screenShareContainer.firstChild,
+      );
     }
   }
 
@@ -3107,37 +3664,57 @@ function loadYouTubePlayer(videoId, options = {}) {
             state.ytPlayerReady = true;
             const player = event.target;
 
-            const iframe = document.getElementById("yt-player-target") || container.querySelector("iframe");
+            const iframe =
+              document.getElementById("yt-player-target") ||
+              container.querySelector("iframe");
             if (iframe) {
-              iframe.setAttribute("allow", "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share");
+              iframe.setAttribute(
+                "allow",
+                "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
+              );
               iframe.setAttribute("allowfullscreen", "true");
             }
 
-            const startPos = (state.pendingYtSync && typeof state.pendingYtSync.time === "number")
-              ? state.pendingYtSync.time
-              : (options.initialTime || 0);
+            const startPos =
+              state.pendingYtSync &&
+              typeof state.pendingYtSync.time === "number"
+                ? state.pendingYtSync.time
+                : options.initialTime || 0;
 
-            const shouldPause = (state.pendingYtSync && state.pendingYtSync.paused !== undefined)
-              ? state.pendingYtSync.paused
-              : !!options.paused;
+            const shouldPause =
+              state.pendingYtSync && state.pendingYtSync.paused !== undefined
+                ? state.pendingYtSync.paused
+                : !!options.paused;
 
             if (startPos > 0) {
-              try { player.seekTo(startPos, true); } catch (e) {}
+              try {
+                player.seekTo(startPos, true);
+              } catch (e) {}
             }
 
             if (!isPresenter) {
               // Participant: start muted so browser autoplay policy permits playback
-              try { player.mute(); } catch (e) {}
+              try {
+                player.mute();
+              } catch (e) {}
             }
 
             if (shouldPause) {
-              try { player.pauseVideo(); } catch (e) {}
+              try {
+                player.pauseVideo();
+              } catch (e) {}
               updateTransportPlayButton(false);
             } else {
-              try { player.playVideo(); } catch (e) {}
+              try {
+                player.playVideo();
+              } catch (e) {}
               updateTransportPlayButton(true);
               if (!isPresenter) {
-                showToast("YouTube video synced! Click player or speaker to unmute 🔊", "info", 4000);
+                showToast(
+                  "YouTube video synced! Click player or speaker to unmute 🔊",
+                  "info",
+                  4000,
+                );
               }
             }
 
@@ -3149,7 +3726,8 @@ function loadYouTubePlayer(videoId, options = {}) {
               if (!state.isGroupVideoPresenter) {
                 sendYouTubeCommand("unMute");
                 const tpMuteBtn = document.getElementById("tpMuteBtn");
-                if (tpMuteBtn) tpMuteBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+                if (tpMuteBtn)
+                  tpMuteBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
               }
               container.removeEventListener("click", unmuteOnUserAction);
             };
@@ -3162,11 +3740,17 @@ function loadYouTubePlayer(videoId, options = {}) {
             state._lastHandledYtState = stateId;
 
             const player = event.target;
-            const curTime = player.getCurrentTime ? (player.getCurrentTime() || 0) : 0;
-            const dur = player.getDuration ? (player.getDuration() || 0) : (state.groupVideoDuration || 0);
+            const curTime = player.getCurrentTime
+              ? player.getCurrentTime() || 0
+              : 0;
+            const dur = player.getDuration
+              ? player.getDuration() || 0
+              : state.groupVideoDuration || 0;
 
-            const amHost = state.isRoomCreator ||
-              (state.participants[state.userId] && state.participants[state.userId].isCreator) ||
+            const amHost =
+              state.isRoomCreator ||
+              (state.participants[state.userId] &&
+                state.participants[state.userId].isCreator) ||
               (state.hostUserId && state.hostUserId === state.userId);
 
             if (stateId === window.YT.PlayerState.PLAYING) {
@@ -3220,7 +3804,11 @@ function loadYouTubePlayer(videoId, options = {}) {
           onError: (event) => {
             console.warn("YouTube player error:", event.data);
             if (event.data === 101 || event.data === 150) {
-              showToast("Embedding restricted by the owner. Share your screen/tab instead! 📺", "info", 6000);
+              showToast(
+                "Embedding restricted by the owner. Share your screen/tab instead! 📺",
+                "info",
+                6000,
+              );
             }
           },
         },
@@ -3253,7 +3841,8 @@ function loadYouTubePlayer(videoId, options = {}) {
   document.getElementById("stageEmpty")?.classList.add("hidden");
   document.getElementById("stageTop")?.classList.remove("hidden");
   document.getElementById("transport")?.classList.remove("hidden");
-  if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
+  if (elements.streamTypeIcon)
+    elements.streamTypeIcon.className = "fas fa-film";
   if (elements.stopScreenShareBtn && state.isGroupVideoPresenter) {
     elements.stopScreenShareBtn.classList.remove("hidden");
   } else if (elements.stopScreenShareBtn) {
@@ -3261,7 +3850,8 @@ function loadYouTubePlayer(videoId, options = {}) {
   }
 
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "SCREENING — " + (options.title || "YOUTUBE VIDEO").toUpperCase();
+    document.getElementById("nowShowing").textContent =
+      "SCREENING — " + (options.title || "YOUTUBE VIDEO").toUpperCase();
   }
 }
 
@@ -3270,14 +3860,17 @@ function loadGenericEmbedVideo(embedUrl, title, initialTime = 0) {
 
   if (elements.screenShareVideo) {
     elements.screenShareVideo.onerror = null;
-    try { elements.screenShareVideo.pause(); } catch (e) {}
+    try {
+      elements.screenShareVideo.pause();
+    } catch (e) {}
     elements.screenShareVideo.classList.add("hidden");
   }
 
   const iframe = document.createElement("iframe");
   iframe.id = "group-video-player";
   iframe.src = embedUrl;
-  iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+  iframe.allow =
+    "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
   iframe.allowFullscreen = true;
   iframe.style.position = "absolute";
   iframe.style.inset = "0";
@@ -3297,7 +3890,10 @@ function loadGenericEmbedVideo(embedUrl, title, initialTime = 0) {
     container.style.zIndex = "1";
     if (elements.screenShareContainer) {
       elements.screenShareContainer.classList.remove("hidden");
-      elements.screenShareContainer.insertBefore(container, elements.screenShareContainer.firstChild);
+      elements.screenShareContainer.insertBefore(
+        container,
+        elements.screenShareContainer.firstChild,
+      );
     }
   }
 
@@ -3309,9 +3905,11 @@ function loadGenericEmbedVideo(embedUrl, title, initialTime = 0) {
   document.getElementById("transport")?.classList.remove("hidden");
 
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "SCREENING — " + (title || "EMBED VIDEO").toUpperCase();
+    document.getElementById("nowShowing").textContent =
+      "SCREENING — " + (title || "EMBED VIDEO").toUpperCase();
   }
-  if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
+  if (elements.streamTypeIcon)
+    elements.streamTypeIcon.className = "fas fa-film";
   if (elements.stopScreenShareBtn && state.isGroupVideoPresenter) {
     elements.stopScreenShareBtn.classList.remove("hidden");
   } else if (elements.stopScreenShareBtn) {
@@ -3380,9 +3978,13 @@ function startGroupVideoFromUrl(url, title) {
 }
 
 function startGroupVideo(src, title, explicitEmbedInfo = null) {
-  const isOtherSharing = state.screenShareUserId && state.screenShareUserId !== state.userId;
+  const isOtherSharing =
+    state.screenShareUserId && state.screenShareUserId !== state.userId;
   if (isOtherSharing) {
-    showToast(`${state.screenShareUser || "Someone"} is currently presenting. They must stop first.`, "info");
+    showToast(
+      `${state.screenShareUser || "Someone"} is currently presenting. They must stop first.`,
+      "info",
+    );
     return;
   }
   if (state.screenShareStream) stopScreenShare();
@@ -3395,13 +3997,17 @@ function startGroupVideo(src, title, explicitEmbedInfo = null) {
   document.getElementById("stageEmpty")?.classList.add("hidden");
   document.getElementById("stageTop")?.classList.remove("hidden");
   document.getElementById("transport")?.classList.remove("hidden");
-  if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.remove("hidden");
+  if (elements.stopScreenShareBtn)
+    elements.stopScreenShareBtn.classList.remove("hidden");
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "SCREENING — " + (title || "VIDEO").toUpperCase();
+    document.getElementById("nowShowing").textContent =
+      "SCREENING — " + (title || "VIDEO").toUpperCase();
   }
 
   // Check if it's a restricted or embeddable platform URL
-  const embedInfo = explicitEmbedInfo || (typeof src === "string" ? detectEmbedSource(src) : null);
+  const embedInfo =
+    explicitEmbedInfo ||
+    (typeof src === "string" ? detectEmbedSource(src) : null);
 
   cleanUpActivePlayer();
 
@@ -3415,14 +4021,21 @@ function startGroupVideo(src, title, explicitEmbedInfo = null) {
     state.screenShareUserId = state.userId;
 
     if (embedInfo.type === "youtube" && embedInfo.id) {
-      loadYouTubePlayer(embedInfo.id, { title: title || embedInfo.title, initialTime: 0, paused: false });
+      loadYouTubePlayer(embedInfo.id, {
+        title: title || embedInfo.title,
+        initialTime: 0,
+        paused: false,
+      });
     } else {
       loadGenericEmbedVideo(embedInfo.embedUrl, title || embedInfo.title, 0);
     }
 
-    if (elements.screenShareUser) elements.screenShareUser.textContent = `You (streaming: ${title || embedInfo.title})`;
-    if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
-    if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.remove("hidden");
+    if (elements.screenShareUser)
+      elements.screenShareUser.textContent = `You (streaming: ${title || embedInfo.title})`;
+    if (elements.streamTypeIcon)
+      elements.streamTypeIcon.className = "fas fa-film";
+    if (elements.stopScreenShareBtn)
+      elements.stopScreenShareBtn.classList.remove("hidden");
 
     broadcastToPeers({
       type: "group_video_start",
@@ -3449,7 +4062,9 @@ function startGroupVideo(src, title, explicitEmbedInfo = null) {
   const video = elements.screenShareVideo;
   if (!video) return;
 
-  const isUrl = typeof src === "string" && (src.startsWith("http://") || src.startsWith("https://"));
+  const isUrl =
+    typeof src === "string" &&
+    (src.startsWith("http://") || src.startsWith("https://"));
 
   // Reset video element cleanly
   video.onerror = null;
@@ -3460,7 +4075,9 @@ function startGroupVideo(src, title, explicitEmbedInfo = null) {
   video.onseeked = null;
   video.onended = null;
 
-  try { video.pause(); } catch (e) {}
+  try {
+    video.pause();
+  } catch (e) {}
   video.srcObject = null;
   video.controls = false;
   video.autoplay = true;
@@ -3478,8 +4095,10 @@ function startGroupVideo(src, title, explicitEmbedInfo = null) {
       video.src = src;
       return;
     }
-    if (!video.src || video.src === "" || video.src === window.location.href) return;
-    if (video.error && video.error.code === MediaError.MEDIA_ERR_ABORTED) return;
+    if (!video.src || video.src === "" || video.src === window.location.href)
+      return;
+    if (video.error && video.error.code === MediaError.MEDIA_ERR_ABORTED)
+      return;
 
     const msg = isUrl
       ? "Could not play video from this URL. Please verify the link is accessible or share your screen/tab instead."
@@ -3504,157 +4123,185 @@ function startGroupVideo(src, title, explicitEmbedInfo = null) {
 
     const playPromise = video.play();
     if (playPromise !== undefined) {
-      playPromise.then(() => {
-        try {
-          let stream = null;
+      playPromise
+        .then(() => {
           try {
-            // Capture video stream for WebRTC
-            const rawStream = video.captureStream ? video.captureStream() : (video.mozCaptureStream ? video.mozCaptureStream() : null);
+            let stream = null;
+            try {
+              // Capture video stream for WebRTC
+              const rawStream = video.captureStream
+                ? video.captureStream()
+                : video.mozCaptureStream
+                  ? video.mozCaptureStream()
+                  : null;
 
-            // 1. Prefer native decoded audio track from captureStream (handles high bitrate, 5.1/7.1, 48kHz, AC3/DTS natively)
-            let audioTrack = null;
-            if (rawStream && rawStream.getAudioTracks().length > 0) {
-              audioTrack = rawStream.getAudioTracks()[0];
-            } else {
-              // Web Audio extraction pipeline fallback if captureStream produced no audio track
-              try {
-                if (!window._streamAudioContext) {
-                  window._streamAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-                }
-                const actx = window._streamAudioContext;
-                if (actx.state === "suspended") actx.resume();
+              // 1. Prefer native decoded audio track from captureStream (handles high bitrate, 5.1/7.1, 48kHz, AC3/DTS natively)
+              let audioTrack = null;
+              if (rawStream && rawStream.getAudioTracks().length > 0) {
+                audioTrack = rawStream.getAudioTracks()[0];
+              } else {
+                // Web Audio extraction pipeline fallback if captureStream produced no audio track
+                try {
+                  if (!window._streamAudioContext) {
+                    window._streamAudioContext = new (
+                      window.AudioContext || window.webkitAudioContext
+                    )();
+                  }
+                  const actx = window._streamAudioContext;
+                  if (actx.state === "suspended") actx.resume();
 
-                if (!video._audioNodeConnected) {
-                  const srcNode = actx.createMediaElementSource(video);
-                  const destNode = actx.createMediaStreamDestination();
-                  srcNode.connect(destNode);
-                  srcNode.connect(actx.destination); // Hear audio locally
-                  video._audioNodeConnected = true;
-                  video._destNode = destNode;
+                  if (!video._audioNodeConnected) {
+                    const srcNode = actx.createMediaElementSource(video);
+                    const destNode = actx.createMediaStreamDestination();
+                    srcNode.connect(destNode);
+                    srcNode.connect(actx.destination); // Hear audio locally
+                    video._audioNodeConnected = true;
+                    video._destNode = destNode;
+                  }
+                  if (
+                    video._destNode &&
+                    video._destNode.stream.getAudioTracks().length > 0
+                  ) {
+                    audioTrack = video._destNode.stream.getAudioTracks()[0];
+                  }
+                } catch (audioErr) {
+                  console.warn("WebAudio pipeline fallback notice:", audioErr);
                 }
-                if (video._destNode && video._destNode.stream.getAudioTracks().length > 0) {
-                  audioTrack = video._destNode.stream.getAudioTracks()[0];
-                }
-              } catch (audioErr) {
-                console.warn("WebAudio pipeline fallback notice:", audioErr);
               }
+
+              if (rawStream) {
+                const videoTrack = rawStream.getVideoTracks()[0];
+                if (videoTrack) {
+                  try {
+                    videoTrack.contentHint = "detail";
+                  } catch (e) {}
+                }
+                const combinedTracks = [videoTrack, audioTrack].filter(Boolean);
+                combinedTracks.forEach((t) => {
+                  t.enabled = true;
+                });
+                stream = new MediaStream(combinedTracks);
+              }
+            } catch (e) {
+              console.warn("captureStream error:", e);
             }
 
-            if (rawStream) {
-              const videoTrack = rawStream.getVideoTracks()[0];
-              if (videoTrack) {
-                try { videoTrack.contentHint = "detail"; } catch (e) {}
-              }
-              const combinedTracks = [videoTrack, audioTrack].filter(Boolean);
-              combinedTracks.forEach((t) => { t.enabled = true; });
-              stream = new MediaStream(combinedTracks);
+            state.groupVideoStream = stream;
+            state.groupVideoElement = video;
+            state.isGroupVideoPresenter = true;
+            state.screenShareUser = state.username;
+            state.screenShareUserId = state.userId;
+            state.groupVideoCurrentTime = video.currentTime || 0;
+            state.groupVideoIsPlaying = !video.paused;
+
+            if (elements.screenShareUser)
+              elements.screenShareUser.textContent = `You (streaming: ${title})`;
+            if (elements.streamTypeIcon)
+              elements.streamTypeIcon.className = "fas fa-film";
+            if (elements.stopScreenShareBtn)
+              elements.stopScreenShareBtn.classList.remove("hidden");
+
+            // Broadcast video stream to connected peers if stream available
+            if (stream) {
+              Object.keys(state.connections).forEach((peerId) => {
+                if (
+                  state.connections[peerId] &&
+                  state.connections[peerId].open
+                ) {
+                  callPeerForGroupVideo(peerId, stream, title);
+                }
+              });
             }
-          } catch (e) {
-            console.warn("captureStream error:", e);
-          }
 
-          state.groupVideoStream = stream;
-          state.groupVideoElement = video;
-          state.isGroupVideoPresenter = true;
-          state.screenShareUser = state.username;
-          state.screenShareUserId = state.userId;
-          state.groupVideoCurrentTime = video.currentTime || 0;
-          state.groupVideoIsPlaying = !video.paused;
-
-          if (elements.screenShareUser) elements.screenShareUser.textContent = `You (streaming: ${title})`;
-          if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
-          if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.remove("hidden");
-
-          // Broadcast video stream to connected peers if stream available
-          if (stream) {
-            Object.keys(state.connections).forEach((peerId) => {
-              if (state.connections[peerId] && state.connections[peerId].open) {
-                callPeerForGroupVideo(peerId, stream, title);
-              }
-            });
-          }
-
-          // Broadcast video details to peers (peers with URL can load directly in sync)
-          broadcastToPeers({
-            type: "group_video_start",
-            title,
-            url: isUrl ? src : null,
-            isUrl: isUrl,
-            isEmbed: false,
-            currentTime: video.currentTime || 0,
-            duration: getActiveVideoDuration(),
-            paused: video.paused,
-            timestamp: Date.now(),
-            userId: state.userId,
-            username: state.username,
-          });
-
-          if (!state.movieMode) activateMovieMode();
-          showToast(`Streaming "${title}" to the room! 🎬`, "success");
-          updateParticipantsUI();
-          startTransportTicker();
-
-          video.onplay = () => {
-            updateTransportPlayButton(true);
-            state.groupVideoIsPlaying = true;
+            // Broadcast video details to peers (peers with URL can load directly in sync)
             broadcastToPeers({
-              type: "group_video_sync",
-              action: "play",
-              time: video.currentTime,
-              duration: getActiveVideoDuration(),
-              paused: false,
-              timestamp: Date.now()
-            });
-            startPresenterHeartbeat();
-          };
-          video.onpause = () => {
-            updateTransportPlayButton(false);
-            state.groupVideoIsPlaying = false;
-            broadcastToPeers({
-              type: "group_video_sync",
-              action: "pause",
-              time: video.currentTime,
-              duration: getActiveVideoDuration(),
-              paused: true,
-              timestamp: Date.now()
-            });
-            stopPresenterHeartbeat();
-          };
-          video.onseeked = () => {
-            broadcastToPeers({
-              type: "group_video_sync",
-              action: "seek",
-              time: video.currentTime,
+              type: "group_video_start",
+              title,
+              url: isUrl ? src : null,
+              isUrl: isUrl,
+              isEmbed: false,
+              currentTime: video.currentTime || 0,
               duration: getActiveVideoDuration(),
               paused: video.paused,
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              userId: state.userId,
+              username: state.username,
             });
-          };
-          video.onended = () => stopGroupVideo();
 
-          startPresenterHeartbeat();
-        } catch (innerErr) {
-          console.error("Error setting up stream broadcast:", innerErr);
-        }
-      }).catch((err) => {
-        console.warn("Autoplay notice, checking fallback:", err);
-        if (err.name === "NotAllowedError") {
-          video.muted = true;
-          video.play().then(() => {
-            showToast("Video muted due to browser policy. Click video to unmute 🔊", "info", 5000);
-            const unmuteOnClick = () => {
-              video.muted = false;
-              showToast("Audio unmuted! 🔊", "success", 2000);
-              video.removeEventListener("click", unmuteOnClick);
+            if (!state.movieMode) activateMovieMode();
+            showToast(`Streaming "${title}" to the room! 🎬`, "success");
+            updateParticipantsUI();
+            startTransportTicker();
+
+            video.onplay = () => {
+              updateTransportPlayButton(true);
+              state.groupVideoIsPlaying = true;
+              broadcastToPeers({
+                type: "group_video_sync",
+                action: "play",
+                time: video.currentTime,
+                duration: getActiveVideoDuration(),
+                paused: false,
+                timestamp: Date.now(),
+              });
+              startPresenterHeartbeat();
             };
-            video.addEventListener("click", unmuteOnClick);
-          }).catch((e) => {
-            showError("Could not play video: " + e.message);
-          });
-        } else {
-          showError("Could not play video: " + err.message);
-        }
-      });
+            video.onpause = () => {
+              updateTransportPlayButton(false);
+              state.groupVideoIsPlaying = false;
+              broadcastToPeers({
+                type: "group_video_sync",
+                action: "pause",
+                time: video.currentTime,
+                duration: getActiveVideoDuration(),
+                paused: true,
+                timestamp: Date.now(),
+              });
+              stopPresenterHeartbeat();
+            };
+            video.onseeked = () => {
+              broadcastToPeers({
+                type: "group_video_sync",
+                action: "seek",
+                time: video.currentTime,
+                duration: getActiveVideoDuration(),
+                paused: video.paused,
+                timestamp: Date.now(),
+              });
+            };
+            video.onended = () => stopGroupVideo();
+
+            startPresenterHeartbeat();
+          } catch (innerErr) {
+            console.error("Error setting up stream broadcast:", innerErr);
+          }
+        })
+        .catch((err) => {
+          console.warn("Autoplay notice, checking fallback:", err);
+          if (err.name === "NotAllowedError") {
+            video.muted = true;
+            video
+              .play()
+              .then(() => {
+                showToast(
+                  "Video muted due to browser policy. Click video to unmute 🔊",
+                  "info",
+                  5000,
+                );
+                const unmuteOnClick = () => {
+                  video.muted = false;
+                  showToast("Audio unmuted! 🔊", "success", 2000);
+                  video.removeEventListener("click", unmuteOnClick);
+                };
+                video.addEventListener("click", unmuteOnClick);
+              })
+              .catch((e) => {
+                showError("Could not play video: " + e.message);
+              });
+          } else {
+            showError("Could not play video: " + err.message);
+          }
+        });
     }
   };
 
@@ -3679,8 +4326,8 @@ function callPeerForGroupVideo(peerId, stream, title) {
         title,
         duration: getActiveVideoDuration(),
         userId: state.userId,
-        username: state.username
-      }
+        username: state.username,
+      },
     });
     if (call) {
       state.groupVideoCalls[peerId] = call;
@@ -3691,17 +4338,20 @@ function callPeerForGroupVideo(peerId, stream, title) {
           if (!pc) return;
           pc.getSenders().forEach((sender) => {
             if (sender.track && sender.track.kind === "video") {
-              try { sender.track.contentHint = "detail"; } catch (e) {}
+              try {
+                sender.track.contentHint = "detail";
+              } catch (e) {}
               const params = sender.getParameters();
-              if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+              if (!params.encodings || params.encodings.length === 0)
+                params.encodings = [{}];
               params.encodings[0].maxBitrate = 12000000; // 12 Mbps cap for crystal clear 1080p stream
               params.encodings[0].minBitrate = 2500000; // 2.5 Mbps minimum to prevent WebRTC downscaling
               params.encodings[0].maxFramerate = 60;
               params.degradationPreference = "maintain-resolution"; // PRESERVES 1080p RESOLUTION! Never drops to 360p!
 
               const v = elements.screenShareVideo;
-              const w = v ? (v.videoWidth || 0) : 0;
-              const h = v ? (v.videoHeight || 0) : 0;
+              const w = v ? v.videoWidth || 0 : 0;
+              const h = v ? v.videoHeight || 0 : 0;
               if (w >= 3840 || h >= 2160) {
                 params.encodings[0].scaleResolutionDownBy = 2.0; // 4K -> 1080p
               } else if (w >= 2560 || h >= 1440) {
@@ -3709,12 +4359,17 @@ function callPeerForGroupVideo(peerId, stream, title) {
               } else {
                 params.encodings[0].scaleResolutionDownBy = 1.0; // Keep full 1080p / 720p!
               }
-              sender.setParameters(params).catch((e) => console.warn("sender.setParameters:", e));
+              sender
+                .setParameters(params)
+                .catch((e) => console.warn("sender.setParameters:", e));
             } else if (sender.track && sender.track.kind === "audio") {
               const params = sender.getParameters();
-              if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+              if (!params.encodings || params.encodings.length === 0)
+                params.encodings = [{}];
               params.encodings[0].maxBitrate = 256000; // 256 kbps audio
-              sender.setParameters(params).catch((e) => console.warn("audio sender.setParameters:", e));
+              sender
+                .setParameters(params)
+                .catch((e) => console.warn("audio sender.setParameters:", e));
             }
           });
         } catch (e) {}
@@ -3749,7 +4404,9 @@ function stopGroupVideo() {
     video.onseeked = null;
     video.onended = null;
 
-    try { video.pause(); } catch (e) {}
+    try {
+      video.pause();
+    } catch (e) {}
 
     if (video.srcObject) {
       try {
@@ -3761,9 +4418,13 @@ function stopGroupVideo() {
     if (video.src) {
       const oldSrc = video.src;
       video.removeAttribute("src");
-      try { video.load(); } catch (e) {}
+      try {
+        video.load();
+      } catch (e) {}
       if (oldSrc.startsWith("blob:")) {
-        try { URL.revokeObjectURL(oldSrc); } catch (e) {}
+        try {
+          URL.revokeObjectURL(oldSrc);
+        } catch (e) {}
       }
     }
 
@@ -3778,7 +4439,9 @@ function stopGroupVideo() {
   }
 
   Object.values(state.groupVideoCalls).forEach((call) => {
-    try { call.close(); } catch (e) {}
+    try {
+      call.close();
+    } catch (e) {}
   });
   state.groupVideoCalls = {};
 
@@ -3800,10 +4463,13 @@ function stopGroupVideo() {
   document.getElementById("stageEmpty")?.classList.remove("hidden");
   document.getElementById("stageTop")?.classList.add("hidden");
   document.getElementById("transport")?.classList.add("hidden");
-  if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
-  if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
+  if (elements.stopScreenShareBtn)
+    elements.stopScreenShareBtn.classList.add("hidden");
+  if (elements.streamTypeIcon)
+    elements.streamTypeIcon.className = "fas fa-desktop";
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "MOVIENIGHT — NOTHING SCREENING";
+    document.getElementById("nowShowing").textContent =
+      "MOVIENIGHT — NOTHING SCREENING";
   }
 
   broadcastToPeers({ type: "group_video_stop", userId: state.userId });
@@ -3826,10 +4492,13 @@ function handleGroupVideoStart(data) {
   document.getElementById("stageEmpty")?.classList.add("hidden");
   document.getElementById("stageTop")?.classList.remove("hidden");
   document.getElementById("transport")?.classList.remove("hidden");
-  if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
-  if (elements.screenShareUser) elements.screenShareUser.textContent = state.screenShareUser;
+  if (elements.stopScreenShareBtn)
+    elements.stopScreenShareBtn.classList.add("hidden");
+  if (elements.screenShareUser)
+    elements.screenShareUser.textContent = state.screenShareUser;
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "SCREENING — " + (data.title || "VIDEO").toUpperCase();
+    document.getElementById("nowShowing").textContent =
+      "SCREENING — " + (data.title || "VIDEO").toUpperCase();
   }
 
   const tpDurTime = document.getElementById("tpDurTime");
@@ -3840,15 +4509,27 @@ function handleGroupVideoStart(data) {
 
   cleanUpActivePlayer();
 
-  const transitSeconds = data.timestamp ? Math.max(0, (Date.now() - data.timestamp) / 1000) : 0;
-  const initialPosition = (data.currentTime || 0) + (data.paused ? 0 : transitSeconds);
+  const transitSeconds = data.timestamp
+    ? Math.max(0, (Date.now() - data.timestamp) / 1000)
+    : 0;
+  const initialPosition =
+    (data.currentTime || 0) + (data.paused ? 0 : transitSeconds);
 
   if (data.isEmbed) {
     state.groupVideoIsEmbed = true;
-    state.groupVideoEmbed = { type: data.embedType, embedUrl: data.embedUrl, id: data.videoId, title: data.title };
+    state.groupVideoEmbed = {
+      type: data.embedType,
+      embedUrl: data.embedUrl,
+      id: data.videoId,
+      title: data.title,
+    };
     if (data.embedType === "youtube" && (data.videoId || data.youtubeId)) {
       const vidId = data.videoId || data.youtubeId;
-      loadYouTubePlayer(vidId, { title: data.title, initialTime: initialPosition, paused: data.paused });
+      loadYouTubePlayer(vidId, {
+        title: data.title,
+        initialTime: initialPosition,
+        paused: data.paused,
+      });
     } else if (data.embedUrl) {
       loadGenericEmbedVideo(data.embedUrl, data.title, initialPosition);
     }
@@ -3856,16 +4537,23 @@ function handleGroupVideoStart(data) {
     state.groupVideoIsEmbed = false;
     state.groupVideoIsUrl = true;
     state.groupVideoUrl = data.url;
-    if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
+    if (elements.streamTypeIcon)
+      elements.streamTypeIcon.className = "fas fa-film";
     elements.screenShareVideo.classList.remove("hidden");
     if (elements.screenShareVideo.srcObject) {
       elements.screenShareVideo.srcObject.getTracks().forEach((t) => t.stop());
       elements.screenShareVideo.srcObject = null;
     }
     elements.screenShareVideo.onerror = () => {
-      if (!elements.screenShareVideo.src || elements.screenShareVideo.src === window.location.href) return;
+      if (
+        !elements.screenShareVideo.src ||
+        elements.screenShareVideo.src === window.location.href
+      )
+        return;
       if (elements.screenShareVideo.hasAttribute("crossorigin")) {
-        console.warn("Participant video CORS notice, retrying without crossorigin...");
+        console.warn(
+          "Participant video CORS notice, retrying without crossorigin...",
+        );
         elements.screenShareVideo.removeAttribute("crossorigin");
         elements.screenShareVideo.src = data.url;
         return;
@@ -3877,13 +4565,19 @@ function handleGroupVideoStart(data) {
 
     const onMeta = () => {
       if (initialPosition > 0) {
-        try { elements.screenShareVideo.currentTime = initialPosition; } catch (e) {}
+        try {
+          elements.screenShareVideo.currentTime = initialPosition;
+        } catch (e) {}
       }
       if (data.paused) {
-        try { elements.screenShareVideo.pause(); } catch (e) {}
+        try {
+          elements.screenShareVideo.pause();
+        } catch (e) {}
         updateTransportPlayButton(false);
       } else {
-        elements.screenShareVideo.play().catch(e => console.log("Remote video play notice:", e));
+        elements.screenShareVideo
+          .play()
+          .catch((e) => console.log("Remote video play notice:", e));
         updateTransportPlayButton(true);
       }
     };
@@ -3892,10 +4586,13 @@ function handleGroupVideoStart(data) {
   } else {
     state.groupVideoIsEmbed = false;
     state.groupVideoIsUrl = false;
-    if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-film";
+    if (elements.streamTypeIcon)
+      elements.streamTypeIcon.className = "fas fa-film";
   }
 
-  displaySystemMessage(`${data.username} started streaming a video: "${data.title}"`);
+  displaySystemMessage(
+    `${data.username} started streaming a video: "${data.title}"`,
+  );
   if (!state.movieMode) activateMovieMode();
   updateParticipantsUI();
 }
@@ -3933,7 +4630,9 @@ function handleGroupVideoStop() {
     video.onseeked = null;
     video.onended = null;
 
-    try { video.pause(); } catch (e) {}
+    try {
+      video.pause();
+    } catch (e) {}
 
     if (video.srcObject) {
       try {
@@ -3944,9 +4643,13 @@ function handleGroupVideoStop() {
     if (video.src) {
       const oldSrc = video.src;
       video.removeAttribute("src");
-      try { video.load(); } catch (e) {}
+      try {
+        video.load();
+      } catch (e) {}
       if (oldSrc.startsWith("blob:")) {
-        try { URL.revokeObjectURL(oldSrc); } catch (e) {}
+        try {
+          URL.revokeObjectURL(oldSrc);
+        } catch (e) {}
       }
     }
     video.classList.add("hidden");
@@ -3955,10 +4658,13 @@ function handleGroupVideoStop() {
   document.getElementById("stageEmpty")?.classList.remove("hidden");
   document.getElementById("stageTop")?.classList.add("hidden");
   document.getElementById("transport")?.classList.add("hidden");
-  if (elements.stopScreenShareBtn) elements.stopScreenShareBtn.classList.add("hidden");
-  if (elements.streamTypeIcon) elements.streamTypeIcon.className = "fas fa-desktop";
+  if (elements.stopScreenShareBtn)
+    elements.stopScreenShareBtn.classList.add("hidden");
+  if (elements.streamTypeIcon)
+    elements.streamTypeIcon.className = "fas fa-desktop";
   if (document.getElementById("nowShowing")) {
-    document.getElementById("nowShowing").textContent = "MOVIENIGHT — NOTHING SCREENING";
+    document.getElementById("nowShowing").textContent =
+      "MOVIENIGHT — NOTHING SCREENING";
   }
 
   if (state.movieMode) deactivateMovieMode();
@@ -3968,12 +4674,16 @@ function handleGroupVideoStop() {
 
 function handleGroupVideoControl(data) {
   if (!state.isGroupVideoPresenter) return;
-  const isHost = (data.senderId && state.participants[data.senderId]?.isCreator) ||
-                 (data.senderId && data.senderId === state.hostUserId) ||
-                 (data.senderId && data.senderId === state.roomId) ||
-                 state.isRoomCreator;
+  const isHost =
+    (data.senderId && state.participants[data.senderId]?.isCreator) ||
+    (data.senderId && data.senderId === state.hostUserId) ||
+    (data.senderId && data.senderId === state.roomId) ||
+    state.isRoomCreator;
   if (!isHost) {
-    console.warn("Ignoring group_video_control from unauthorized sender:", data.senderId);
+    console.warn(
+      "Ignoring group_video_control from unauthorized sender:",
+      data.senderId,
+    );
     return;
   }
 
@@ -4005,7 +4715,11 @@ function handleGroupVideoControl(data) {
         timestamp: Date.now(),
       });
       startPresenterHeartbeat();
-    } else if (data.action === "seek" && typeof data.time === "number" && Number.isFinite(data.time)) {
+    } else if (
+      data.action === "seek" &&
+      typeof data.time === "number" &&
+      Number.isFinite(data.time)
+    ) {
       sendYouTubeCommand("seekTo", [data.time, true]);
       state.groupVideoCurrentTime = data.time;
       broadcastToPeers({
@@ -4041,7 +4755,7 @@ function handleGroupVideoControl(data) {
     } catch (e) {}
   } else if (data.action === "play") {
     try {
-      video.play().catch(e => console.warn("Play trigger notice:", e));
+      video.play().catch((e) => console.warn("Play trigger notice:", e));
       updateTransportPlayButton(true);
       state.groupVideoIsPlaying = true;
       broadcastToPeers({
@@ -4054,7 +4768,11 @@ function handleGroupVideoControl(data) {
       });
       startPresenterHeartbeat();
     } catch (e) {}
-  } else if (data.action === "seek" && typeof data.time === "number" && Number.isFinite(data.time)) {
+  } else if (
+    data.action === "seek" &&
+    typeof data.time === "number" &&
+    Number.isFinite(data.time)
+  ) {
     try {
       video.currentTime = data.time;
       state.groupVideoCurrentTime = data.time;
@@ -4073,10 +4791,13 @@ function handleGroupVideoControl(data) {
 function handleGroupVideoSync(data) {
   if (state.isGroupVideoPresenter) return;
 
-  const transitSeconds = data.timestamp ? Math.max(0, (Date.now() - data.timestamp) / 1000) : 0;
-  const targetTime = typeof data.time === "number" && Number.isFinite(data.time)
-    ? data.time + (data.action === "pause" ? 0 : transitSeconds)
-    : null;
+  const transitSeconds = data.timestamp
+    ? Math.max(0, (Date.now() - data.timestamp) / 1000)
+    : 0;
+  const targetTime =
+    typeof data.time === "number" && Number.isFinite(data.time)
+      ? data.time + (data.action === "pause" ? 0 : transitSeconds)
+      : null;
 
   if (data.duration && Number.isFinite(data.duration) && data.duration > 0) {
     state.groupVideoDuration = data.duration;
@@ -4103,16 +4824,23 @@ function handleGroupVideoSync(data) {
         updateTransportPlayButton(false);
         state.groupVideoIsPlaying = false;
       } else if (data.action === "play") {
-        if (targetTime !== null) sendYouTubeCommand("seekTo", [targetTime, true]);
+        if (targetTime !== null)
+          sendYouTubeCommand("seekTo", [targetTime, true]);
         sendYouTubeCommand("playVideo");
         updateTransportPlayButton(true);
         state.groupVideoIsPlaying = true;
       } else if (data.action === "seek") {
-        if (typeof data.time === "number" && Number.isFinite(data.time)) sendYouTubeCommand("seekTo", [data.time, true]);
+        if (typeof data.time === "number" && Number.isFinite(data.time))
+          sendYouTubeCommand("seekTo", [data.time, true]);
       } else if (data.action === "heartbeat") {
         let cur = 0;
-        if (state.ytPlayer && typeof state.ytPlayer.getCurrentTime === "function") {
-          try { cur = state.ytPlayer.getCurrentTime() || 0; } catch (e) {}
+        if (
+          state.ytPlayer &&
+          typeof state.ytPlayer.getCurrentTime === "function"
+        ) {
+          try {
+            cur = state.ytPlayer.getCurrentTime() || 0;
+          } catch (e) {}
         }
         if (data.paused === false) {
           if (targetTime !== null && Math.abs(cur - targetTime) > 0.8) {
@@ -4130,14 +4858,19 @@ function handleGroupVideoSync(data) {
     } catch (e) {
       console.warn("YouTube sync notice:", e);
     }
-    setTimeout(() => { state.ignoreYtStateEvents = false; }, 300);
+    setTimeout(() => {
+      state.ignoreYtStateEvents = false;
+    }, 300);
 
     // Update transport bar displays for YouTube
     const tpCurTime = document.getElementById("tpCurTime");
     const tpDurTime = document.getElementById("tpDurTime");
     const tpSeek = document.getElementById("tpSeek");
     const duration = getActiveVideoDuration();
-    const curTime = typeof data.time === "number" && Number.isFinite(data.time) ? data.time : getActiveVideoCurrentTime();
+    const curTime =
+      typeof data.time === "number" && Number.isFinite(data.time)
+        ? data.time
+        : getActiveVideoCurrentTime();
 
     if (tpCurTime) {
       tpCurTime.textContent = fmtTransportTime(curTime);
@@ -4163,7 +4896,12 @@ function handleGroupVideoSync(data) {
     }
     try {
       vid.pause();
-      if (vid.src && !vid.srcObject && typeof data.time === "number" && Number.isFinite(data.time)) {
+      if (
+        vid.src &&
+        !vid.srcObject &&
+        typeof data.time === "number" &&
+        Number.isFinite(data.time)
+      ) {
         vid.currentTime = data.time;
       }
     } catch (e) {}
@@ -4185,7 +4923,9 @@ function handleGroupVideoSync(data) {
     if (typeof data.time === "number" && Number.isFinite(data.time)) {
       state.groupVideoCurrentTime = data.time;
       if (vid.src && !vid.srcObject) {
-        try { vid.currentTime = data.time; } catch (e) {}
+        try {
+          vid.currentTime = data.time;
+        } catch (e) {}
       }
     }
   } else if (data.action === "duration") {
@@ -4201,7 +4941,9 @@ function handleGroupVideoSync(data) {
       state.groupVideoCurrentTime = targetTime;
       if (vid.src && !vid.srcObject) {
         if (Math.abs(vid.currentTime - targetTime) > 0.6) {
-          try { vid.currentTime = targetTime; } catch (e) {}
+          try {
+            vid.currentTime = targetTime;
+          } catch (e) {}
         }
       }
     }
@@ -4236,7 +4978,9 @@ async function toggleCamera() {
     removeWebcamTile(state.userId);
 
     Object.values(state.webcamCalls).forEach((call) => {
-      try { call.close(); } catch (e) {}
+      try {
+        call.close();
+      } catch (e) {}
     });
     state.webcamCalls = {};
 
@@ -4248,8 +4992,17 @@ async function toggleCamera() {
     // Turn on camera (with audio)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
-        audio: true,
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          frameRate: { ideal: 30 },
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
       });
       state.webcamStream = stream;
 
@@ -4262,7 +5015,11 @@ async function toggleCamera() {
         }
       });
 
-      broadcastToPeers({ type: "webcam_start", userId: state.userId, username: state.username });
+      broadcastToPeers({
+        type: "webcam_start",
+        userId: state.userId,
+        username: state.username,
+      });
       showToast("Camera & mic active 🎥", "success");
       updateMediaControlsUI();
       if (state.movieMode) syncMmButtons();
@@ -4283,7 +5040,9 @@ async function toggleMic() {
     state.micStream.getTracks().forEach((t) => t.stop());
     state.micStream = null;
     Object.values(state.micCalls).forEach((call) => {
-      try { call.close(); } catch (e) {}
+      try {
+        call.close();
+      } catch (e) {}
     });
     state.micCalls = {};
     state.isMicOn = false;
@@ -4293,7 +5052,10 @@ async function toggleMic() {
     if (state.movieMode) syncMmButtons();
   } else {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false,
+      });
       state.micStream = stream;
       state.isMicOn = true;
       // Call peers with mic stream
@@ -4301,13 +5063,23 @@ async function toggleMic() {
         if (state.connections[peerId] && state.connections[peerId].open) {
           try {
             const call = state.peer.call(peerId, stream, {
-              metadata: { type: "mic", userId: state.userId, username: state.username }
+              metadata: {
+                type: "mic",
+                userId: state.userId,
+                username: state.username,
+              },
             });
             if (call) state.micCalls[peerId] = call;
-          } catch (err) { console.error("Mic call error:", err); }
+          } catch (err) {
+            console.error("Mic call error:", err);
+          }
         }
       });
-      broadcastToPeers({ type: "mic_start", userId: state.userId, username: state.username });
+      broadcastToPeers({
+        type: "mic_start",
+        userId: state.userId,
+        username: state.username,
+      });
       showToast("Microphone on 🎤", "success");
       updateMediaControlsUI();
       if (state.movieMode) syncMmButtons();
@@ -4323,7 +5095,12 @@ async function toggleMic() {
 // Reactions
 // ============================================================
 function sendReaction(emoji) {
-  broadcastToPeers({ type: "reaction", emoji, username: state.username, userId: state.userId });
+  broadcastToPeers({
+    type: "reaction",
+    emoji,
+    username: state.username,
+    userId: state.userId,
+  });
   showReactionOverlay(emoji, "You");
 }
 
@@ -4362,16 +5139,23 @@ function handleQualityChange() {
               const params = receiver.getParameters();
               if (params.encodings && params.encodings.length > 0) {
                 const enc = params.encodings[0];
-                if (quality === "low") { enc.maxBitrate = 200000; }
-                else if (quality === "medium") { enc.maxBitrate = 800000; }
-                else if (quality === "high") { enc.maxBitrate = 2500000; }
-                else { delete enc.maxBitrate; }
+                if (quality === "low") {
+                  enc.maxBitrate = 200000;
+                } else if (quality === "medium") {
+                  enc.maxBitrate = 800000;
+                } else if (quality === "high") {
+                  enc.maxBitrate = 2500000;
+                } else {
+                  delete enc.maxBitrate;
+                }
                 receiver.setParameters(params).catch(() => {});
               }
             }
           });
         }
-      } catch (e) { console.log("Quality adjust:", e); }
+      } catch (e) {
+        console.log("Quality adjust:", e);
+      }
     });
     showToast(`Quality: ${quality}`, "info", 1500);
   } else if (vid.src) {
@@ -4393,7 +5177,11 @@ function handleQualityChange() {
 function callPeerForWebcam(peerId, stream) {
   try {
     const call = state.peer.call(peerId, stream, {
-      metadata: { type: "webcam", userId: state.userId, username: state.username }
+      metadata: {
+        type: "webcam",
+        userId: state.userId,
+        username: state.username,
+      },
     });
     if (call) state.webcamCalls[peerId] = call;
   } catch (err) {
@@ -4402,12 +5190,14 @@ function callPeerForWebcam(peerId, stream) {
 }
 
 function addWebcamTile(userId, username, stream, isLocal = false) {
-  if (!elements.webcamGrid) elements.webcamGrid = document.getElementById("webcam-grid");
+  if (!elements.webcamGrid)
+    elements.webcamGrid = document.getElementById("webcam-grid");
   if (!elements.webcamGrid) return;
 
   // Ensure webcam grid is visible when a tile is added
   elements.webcamGrid.classList.remove("hidden");
-  if (elements.toggleWebcamsBtn) elements.toggleWebcamsBtn.classList.add("active-action");
+  if (elements.toggleWebcamsBtn)
+    elements.toggleWebcamsBtn.classList.add("active-action");
 
   let tile = document.getElementById(`webcam-tile-${userId}`);
   if (tile) {
@@ -4452,7 +5242,9 @@ function addWebcamTile(userId, username, stream, isLocal = false) {
     micBtn.className = "webcam-tile-btn" + (state.isMicOn ? " active-mic" : "");
     micBtn.id = "local-mic-toggle";
     micBtn.title = state.isMicOn ? "Mute Microphone" : "Unmute Microphone";
-    micBtn.innerHTML = state.isMicOn ? '<i class="fas fa-microphone"></i>' : '<i class="fas fa-microphone-slash"></i>';
+    micBtn.innerHTML = state.isMicOn
+      ? '<i class="fas fa-microphone"></i>'
+      : '<i class="fas fa-microphone-slash"></i>';
     micBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleMic();
@@ -4464,8 +5256,10 @@ function addWebcamTile(userId, username, stream, isLocal = false) {
   }
 
   // Distribute across left and right sides of player stage
-  const leftCol = elements.webcamsLeft || document.getElementById("webcams-left");
-  const rightCol = elements.webcamsRight || document.getElementById("webcams-right");
+  const leftCol =
+    elements.webcamsLeft || document.getElementById("webcams-left");
+  const rightCol =
+    elements.webcamsRight || document.getElementById("webcams-right");
 
   if (leftCol && rightCol) {
     const leftCount = leftCol.children.length;
@@ -4485,7 +5279,9 @@ function removeWebcamTile(userId) {
   if (tile) {
     const v = tile.querySelector("video");
     if (v && v.srcObject) {
-      try { v.srcObject.getTracks().forEach((t) => t.stop()); } catch (e) {}
+      try {
+        v.srcObject.getTracks().forEach((t) => t.stop());
+      } catch (e) {}
     }
     tile.remove();
   }
@@ -4495,7 +5291,8 @@ function removeWebcamTile(userId) {
 // Clipboard
 // ============================================================
 function copyRoomIdToClipboard() {
-  navigator.clipboard.writeText(state.roomId)
+  navigator.clipboard
+    .writeText(state.roomId)
     .then(() => showToast("Room ID copied!", "success"))
     .catch(() => {
       const ta = document.createElement("textarea");
@@ -4510,7 +5307,8 @@ function copyRoomIdToClipboard() {
 
 function copyRoomLinkToClipboard() {
   const link = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(state.roomId)}`;
-  navigator.clipboard.writeText(link)
+  navigator.clipboard
+    .writeText(link)
     .then(() => showToast("Invite link copied!", "success"))
     .catch(() => {
       const ta = document.createElement("textarea");
@@ -4527,10 +5325,18 @@ function copyRoomLinkToClipboard() {
 // URL helpers
 // ============================================================
 function updateUrlWithRoom(roomId) {
-  try { window.history.replaceState({ room: roomId }, "", `${window.location.pathname}?room=${encodeURIComponent(roomId)}`); } catch (e) {}
+  try {
+    window.history.replaceState(
+      { room: roomId },
+      "",
+      `${window.location.pathname}?room=${encodeURIComponent(roomId)}`,
+    );
+  } catch (e) {}
 }
 function clearUrlRoom() {
-  try { window.history.replaceState({}, "", window.location.pathname); } catch (e) {}
+  try {
+    window.history.replaceState({}, "", window.location.pathname);
+  } catch (e) {}
 }
 
 function checkUrlForInvite() {
@@ -4548,7 +5354,9 @@ function checkUrlForInvite() {
         elements.usernameInput.focus();
       }
     }
-  } catch (e) { console.warn("Could not parse room from URL:", e); }
+  } catch (e) {
+    console.warn("Could not parse room from URL:", e);
+  }
 }
 
 // ============================================================
@@ -4579,9 +5387,12 @@ function leaveRoom() {
   if (state.isMicOn) toggleMic();
   if (state.movieMode) deactivateMovieMode();
 
-  if (elements.videoSourceModal) elements.videoSourceModal.classList.add("hidden");
-  if (elements.joinRequestModal) elements.joinRequestModal.classList.add("hidden");
-  if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+  if (elements.videoSourceModal)
+    elements.videoSourceModal.classList.add("hidden");
+  if (elements.joinRequestModal)
+    elements.joinRequestModal.classList.add("hidden");
+  if (elements.joinWaitingModal)
+    elements.joinWaitingModal.classList.add("hidden");
 
   // Broadcast exit message to connected peers before teardown
   const leftUserId = state.userId;
@@ -4593,7 +5404,11 @@ function leaveRoom() {
   Object.values(oldConns).forEach((conn) => {
     if (conn && conn.open) {
       try {
-        conn.send({ type: "participant_left", userId: leftUserId, wasHost: wasHost });
+        conn.send({
+          type: "participant_left",
+          userId: leftUserId,
+          wasHost: wasHost,
+        });
       } catch (e) {}
     }
   });
@@ -4634,15 +5449,25 @@ function leaveRoom() {
   // Allow 60ms for SCTP buffer to flush before disconnecting and freeing room ID
   setTimeout(() => {
     Object.values(oldConns).forEach((conn) => {
-      try { if (conn && conn.open) conn.close(); } catch (e) {}
+      try {
+        if (conn && conn.open) conn.close();
+      } catch (e) {}
     });
     if (oldPeer) {
-      try { oldPeer.disconnect(); } catch (e) {}
-      try { oldPeer.destroy(); } catch (e) {}
+      try {
+        oldPeer.disconnect();
+      } catch (e) {}
+      try {
+        oldPeer.destroy();
+      } catch (e) {}
     }
     if (oldBroker) {
-      try { oldBroker.disconnect(); } catch (e) {}
-      try { oldBroker.destroy(); } catch (e) {}
+      try {
+        oldBroker.disconnect();
+      } catch (e) {}
+      try {
+        oldBroker.destroy();
+      } catch (e) {}
     }
   }, 60);
   updateMediaControlsUI();
@@ -4651,7 +5476,9 @@ function leaveRoom() {
 function broadcastToPeers(data) {
   Object.values(state.connections).forEach((conn) => {
     if (conn && conn.open) {
-      try { conn.send(data); } catch (e) {}
+      try {
+        conn.send(data);
+      } catch (e) {}
     }
   });
 }
@@ -4661,10 +5488,16 @@ function retryConnection() {
     displayConnectionStatus("connecting", "Retrying connection...");
     if (state.peer) {
       Object.values(state.connections).forEach((conn) => {
-        if (conn && conn.open) { try { conn.close(); } catch (e) {} }
+        if (conn && conn.open) {
+          try {
+            conn.close();
+          } catch (e) {}
+        }
       });
       state.connections = {};
-      try { state.peer.destroy(); } catch (e) {}
+      try {
+        state.peer.destroy();
+      } catch (e) {}
       state.peer = null;
     }
     displaySystemMessage("Attempting to reconnect...");
@@ -4676,8 +5509,13 @@ function retryConnection() {
         setTimeout(() => {
           if (state.peer && state.peer.open) connectToPeer(state.roomId);
           else {
-            displayConnectionStatus("error", "Could not connect to PeerJS server");
-            displaySystemMessage("Please try again or check your internet connection");
+            displayConnectionStatus(
+              "error",
+              "Could not connect to PeerJS server",
+            );
+            displaySystemMessage(
+              "Please try again or check your internet connection",
+            );
           }
         }, 2000);
       }
@@ -4697,11 +5535,18 @@ function resetRoom() {
   }
   if (state.webcamStream) toggleCamera();
   if (state.isMicOn) toggleMic();
-  if (state.peer) { try { state.peer.destroy(); } catch (e) {} }
+  if (state.peer) {
+    try {
+      state.peer.destroy();
+    } catch (e) {}
+  }
 
-  if (elements.videoSourceModal) elements.videoSourceModal.classList.add("hidden");
-  if (elements.joinRequestModal) elements.joinRequestModal.classList.add("hidden");
-  if (elements.joinWaitingModal) elements.joinWaitingModal.classList.add("hidden");
+  if (elements.videoSourceModal)
+    elements.videoSourceModal.classList.add("hidden");
+  if (elements.joinRequestModal)
+    elements.joinRequestModal.classList.add("hidden");
+  if (elements.joinWaitingModal)
+    elements.joinWaitingModal.classList.add("hidden");
 
   state.peer = null;
   state.peerId = null;
@@ -4742,7 +5587,10 @@ function refreshAvatars() {
 
 function useCustomAvatar() {
   const customUrl = elements.customAvatarUrlInput.value.trim();
-  if (!customUrl) { showError("Please enter a valid avatar URL"); return Promise.resolve(false); }
+  if (!customUrl) {
+    showError("Please enter a valid avatar URL");
+    return Promise.resolve(false);
+  }
   if (!customUrl.startsWith("http://") && !customUrl.startsWith("https://")) {
     showError("Custom avatar URL must start with http:// or https://");
     return Promise.resolve(false);
@@ -4758,7 +5606,9 @@ function useCustomAvatar() {
       } catch (e) {}
       showToast("Custom avatar applied!", "success");
       elements.customAvatarUrlInput.style.borderColor = "var(--brand-500)";
-      setTimeout(() => { elements.customAvatarUrlInput.style.borderColor = ""; }, 2000);
+      setTimeout(() => {
+        elements.customAvatarUrlInput.style.borderColor = "";
+      }, 2000);
       resolve(true);
     };
     testImg.onerror = function () {
