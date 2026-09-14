@@ -1458,7 +1458,15 @@ function generateUserId() {
   return "user_" + uuid.v4();
 }
 
+const joinLimiter =
+  typeof window !== "undefined" && window.RoomSecurity
+    ? new window.RoomSecurity.JoinAttemptLimiter(5, 60000)
+    : null;
+
 function generateRoomId() {
+  if (typeof window !== "undefined" && window.RoomSecurity && window.RoomSecurity.generateSecureRoomId) {
+    return window.RoomSecurity.generateSecureRoomId(6);
+  }
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let result = "";
   for (let i = 0; i < 6; i++)
@@ -1476,6 +1484,11 @@ async function createRoom() {
   state.hostClaimRetries = 0;
   state.joinRetries = 0;
   state.roomId = generateRoomId();
+  state.capabilityToken =
+    typeof window !== "undefined" && window.RoomSecurity
+      ? window.RoomSecurity.generateCapabilityToken()
+      : "";
+  state.roomEpoch = Date.now();
   state.isRoomCreator = true;
   saveRoomSession();
   initializePeer(state.roomId);
@@ -1484,6 +1497,14 @@ async function createRoom() {
 
 async function joinRoom(targetRoomId = null) {
   if (!(await validateUserInput())) return;
+
+  if (joinLimiter) {
+    const attempt = joinLimiter.recordAttempt();
+    if (!attempt.allowed) {
+      showError(`Too many join attempts. Please wait ${attempt.retryAfterSec}s before trying again.`);
+      return;
+    }
+  }
 
   let roomId =
     typeof targetRoomId === "string" && targetRoomId.trim()
@@ -5306,10 +5327,13 @@ function copyRoomIdToClipboard() {
 }
 
 function copyRoomLinkToClipboard() {
-  const link = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(state.roomId)}`;
+  const tokenParam = state.capabilityToken
+    ? `&token=${encodeURIComponent(state.capabilityToken)}`
+    : "";
+  const link = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(state.roomId)}${tokenParam}`;
   navigator.clipboard
     .writeText(link)
-    .then(() => showToast("Invite link copied!", "success"))
+    .then(() => showToast("Invite link copied with capability token!", "success"))
     .catch(() => {
       const ta = document.createElement("textarea");
       ta.value = link;
@@ -5317,7 +5341,7 @@ function copyRoomLinkToClipboard() {
       ta.select();
       document.execCommand("copy");
       document.body.removeChild(ta);
-      showToast("Invite link copied!", "success");
+      showToast("Invite link copied with capability token!", "success");
     });
 }
 
@@ -5326,10 +5350,13 @@ function copyRoomLinkToClipboard() {
 // ============================================================
 function updateUrlWithRoom(roomId) {
   try {
+    const tokenParam = state.capabilityToken
+      ? `&token=${encodeURIComponent(state.capabilityToken)}`
+      : "";
     window.history.replaceState(
       { room: roomId },
       "",
-      `${window.location.pathname}?room=${encodeURIComponent(roomId)}`,
+      `${window.location.pathname}?room=${encodeURIComponent(roomId)}${tokenParam}`,
     );
   } catch (e) {}
 }
@@ -5343,6 +5370,10 @@ function checkUrlForInvite() {
   try {
     const urlParams = new URLSearchParams(window.location.search);
     const roomParam = urlParams.get("room");
+    const tokenParam = urlParams.get("token");
+    if (tokenParam) {
+      state.capabilityToken = tokenParam.trim();
+    }
     if (roomParam) {
       const cleanRoom = roomParam.trim().toUpperCase();
       elements.roomIdInput.value = cleanRoom;

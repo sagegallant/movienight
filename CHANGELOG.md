@@ -11,13 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - **Hardened Video Proxy & SSRF Defense (P1, P2)**:
-  - Implemented pre-flight DNS resolution with strict IPv4/IPv6 blocklists against private, loopback, link-local, carrier-grade NAT, and cloud metadata (`169.254.169.254`) addresses.
-  - Added socket connection pinning to validated IP addresses, eliminating Time-of-Check to Time-of-Use (TOCTOU) DNS rebinding vulnerabilities.
-  - Enforced recursive validation on HTTP redirects (max 3 redirects).
-  - Restricted outbound proxy ports strictly to standard web ports (80, 443), preventing internal port scanning.
-  - Enforced response Content-Type verification to audio/video/streaming media MIME types.
-  - Replaced wildcard CORS (`Access-Control-Allow-Origin: *`) with origin-matched CORS headers.
-  - Added sliding-window per-IP rate limiting (60 req/min) and connection timeouts.
+  - **Default-Disabled in Public Deployments**: `/proxy-video` defaults to disabled (`ENABLE_VIDEO_PROXY=false`), returning `503 Service Unavailable` out of the box.
+  - **Explicit HTTPS Host Allowlist**: Configurable domain allowlist (`ALLOWED_PROXY_HOSTS`) with exact and wildcard subdomain support (`*.mycdn.com`). Disallows plain `http://` targets by default.
+  - **Pre-flight DNS Validation & Socket Pinning**: Rejects private, loopback, link-local, carrier-grade NAT, and cloud metadata (`169.254.169.254`) addresses. Outbound sockets are pinned directly to pre-validated IPs to prevent TOCTOU DNS rebinding.
+  - **Redirect Revalidation**: Re-validates HTTPS protocol, allowlist, and IP resolution on every hop (max 3 hops).
+  - **Port & Size Restrictions**: Outbound ports strictly restricted to 443 (port 80 allowed only when insecure HTTP flag is enabled); 2 GB response size ceiling (`MAX_STREAM_BYTES`) and 15s idle read timeouts.
+  - **Dual Rate Limiting**: Per-client-IP (60 req/min) and per-target-host (30 req/min) sliding-window rate limiters.
+  - **Range Abuse Protection**: Validates single byte-range syntax and blocks multipart range requests (`bytes=0-10,20-30`) preventing range amplification DoS (CVE-2011-3192).
+  - **Safe Response-Header Sanitization**: Forwards strictly safe media headers; strips upstream `Set-Cookie`, `Server`, `X-Powered-By`, and internal headers.
+- **Room Code Security & Admission Control**:
+  - Replaced `Math.random()` with cryptographically secure room code generation using `crypto.getRandomValues`.
+  - Introduced 128-bit high-entropy capability tokens in invite URLs (`?room=ABC123&token=...`) to authorize invitations.
+  - Added client-side join attempt rate limiting (max 5 per minute) to prevent automated probing.
+  - Implemented room session epoch generation (`roomEpoch`) to reject stale or replayed signaling messages.
+  - Created formal [SECURITY.md](SECURITY.md) documenting security policy, reporting SLA, and transport trust boundaries.
 
 ### Added
 - **P2P Operating Envelope & Room Capacity Enforcement (P3, P4, P21, P22)**:
@@ -26,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 4-tier adaptive bitrate policy (`SOLO`, `SMALL`, `MEDIUM`, `CONSTRAINED`) based on participant count.
   - Host uplink bandwidth calculator to prevent upstream saturation.
   - Live header badge showing room seats (`Seats: 1/6`).
+  - Empirical operating envelope validation evidence published in README.
+- **Automated Integration & Unit Test Suite (47 Tests)**:
+  - Real wire HTTP loopback integration tests in `test/proxyIntegration.test.js` validating live server responses.
+  - Room security unit tests in `test/roomSecurity.test.js`.
+  - GitHub Actions multi-version CI workflow (`.github/workflows/test.yml`) across Node.js 18, 20, and 22 LTS.
 - **TURN Fallback & ICE Configuration Manager (P5)**:
   - Preserved direct P2P as default priority with optional TURN relay fallback.
   - Configured public STUN servers (Google and Twilio STUN).

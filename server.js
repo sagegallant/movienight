@@ -275,6 +275,7 @@ function getCorsHeaders(req) {
     "Access-Control-Allow-Headers": "Range, Content-Type, Accept",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
+    "X-Content-Type-Options": "nosniff",
   };
 }
 
