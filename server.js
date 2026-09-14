@@ -15,6 +15,14 @@ const dns = require("dns").promises;
 const PORT = process.env.PORT || 3000;
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || null;
 
+// Proxy Configuration (Disabled by default in public deployment)
+const ENABLE_VIDEO_PROXY = process.env.ENABLE_VIDEO_PROXY === "true";
+const ALLOW_INSECURE_HTTP_PROXY = process.env.ALLOW_INSECURE_HTTP_PROXY === "true";
+const REQUIRE_PROXY_ALLOWLIST = process.env.REQUIRE_PROXY_ALLOWLIST !== "false";
+const ALLOWED_PROXY_HOSTS = process.env.ALLOWED_PROXY_HOSTS
+  ? process.env.ALLOWED_PROXY_HOSTS.split(",").map((h) => h.trim().toLowerCase()).filter(Boolean)
+  : [];
+
 // MIME types for different file extensions
 const MIME_TYPES = {
   ".html": "text/html",
@@ -56,6 +64,28 @@ function isRateLimited(clientIp) {
   return false;
 }
 
+// In-memory rate limiter per target host (max 30 requests per 60 seconds)
+const TARGET_HOST_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const TARGET_HOST_RATE_LIMIT_MAX = 30;
+const targetHostRateLimitMap = new Map();
+
+function isTargetHostRateLimited(targetHost) {
+  if (!targetHost) return false;
+  const lowerHost = targetHost.toLowerCase();
+  const now = Date.now();
+  let entry = targetHostRateLimitMap.get(lowerHost);
+  if (!entry || now - entry.windowStart > TARGET_HOST_RATE_LIMIT_WINDOW_MS) {
+    entry = { windowStart: now, count: 1 };
+    targetHostRateLimitMap.set(lowerHost, entry);
+    return false;
+  }
+  entry.count++;
+  if (entry.count > TARGET_HOST_RATE_LIMIT_MAX) {
+    return true;
+  }
+  return false;
+}
+
 // Clean up stale rate limit entries periodically
 setInterval(() => {
   const now = Date.now();
@@ -64,19 +94,30 @@ setInterval(() => {
       rateLimitMap.delete(ip);
     }
   }
+  for (const [host, entry] of targetHostRateLimitMap.entries()) {
+    if (now - entry.windowStart > TARGET_HOST_RATE_LIMIT_WINDOW_MS) {
+      targetHostRateLimitMap.delete(host);
+    }
+  }
 }, RATE_LIMIT_WINDOW_MS).unref();
 
-// Concurrency & Bandwidth Exhaustion Guard (max 6 active concurrent streams per client IP)
+// Concurrency & Bandwidth Exhaustion Guard (max 6 active streams per IP, max 30 global)
 const MAX_CONCURRENT_STREAMS_PER_IP = 6;
+const MAX_TOTAL_CONCURRENT_STREAMS = 30;
 const MAX_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB per stream limit
 const activeStreamsPerIp = new Map();
+let totalActiveStreams = 0;
 
 function acquireStreamSlot(clientIp) {
+  if (totalActiveStreams >= MAX_TOTAL_CONCURRENT_STREAMS) {
+    return false;
+  }
   const current = activeStreamsPerIp.get(clientIp) || 0;
   if (current >= MAX_CONCURRENT_STREAMS_PER_IP) {
     return false;
   }
   activeStreamsPerIp.set(clientIp, current + 1);
+  totalActiveStreams++;
   return true;
 }
 
@@ -86,6 +127,9 @@ function releaseStreamSlot(clientIp) {
     activeStreamsPerIp.delete(clientIp);
   } else {
     activeStreamsPerIp.set(clientIp, current - 1);
+  }
+  if (totalActiveStreams > 0) {
+    totalActiveStreams--;
   }
 }
 
@@ -234,8 +278,94 @@ function getCorsHeaders(req) {
   };
 }
 
+// ============================================================
+// Host Allowlist & Security Helpers
+// ============================================================
+function isHostAllowed(hostname, allowedHosts) {
+  if (!hostname || typeof hostname !== "string") return false;
+  if (!Array.isArray(allowedHosts) || allowedHosts.length === 0) return false;
+  const lowerHost = hostname.toLowerCase();
+  return allowedHosts.some((allowed) => {
+    if (!allowed || allowed === "*") return false; // Disallow dangerous blanket wildcard
+    if (allowed.startsWith("*.")) {
+      const root = allowed.slice(2);
+      return lowerHost === root || lowerHost.endsWith("." + root);
+    }
+    return lowerHost === allowed;
+  });
+}
+
+// Validate Range header syntax and reject multipart range attacks (CVE-2011-3192)
+function validateRangeHeader(rangeHeader) {
+  if (!rangeHeader || typeof rangeHeader !== "string") {
+    return { valid: true, sanitized: null };
+  }
+  const trimmed = rangeHeader.trim();
+  if (trimmed.includes(",")) {
+    return {
+      valid: false,
+      error: "Multipart range requests are not permitted",
+    };
+  }
+  const match = trimmed.match(/^bytes=(\d*)-(\d*)$/);
+  if (!match) {
+    return {
+      valid: false,
+      error: "Malformed Range header syntax. Expected format: bytes=start-end",
+    };
+  }
+  const [, startStr, endStr] = match;
+  if (!startStr && !endStr) {
+    return {
+      valid: false,
+      error: "Malformed Range header: at least start or end offset must be provided",
+    };
+  }
+  if (startStr && endStr) {
+    const start = parseInt(startStr, 10);
+    const end = parseInt(endStr, 10);
+    if (start > end) {
+      return {
+        valid: false,
+        error: "Unsatisfiable Range: start byte is greater than end byte",
+      };
+    }
+  }
+  return { valid: true, sanitized: trimmed };
+}
+
+// Whitelist of safe response headers to forward downstream
+const SAFE_RESPONSE_HEADERS = {
+  "content-type": "Content-Type",
+  "content-length": "Content-Length",
+  "content-range": "Content-Range",
+  "accept-ranges": "Accept-Ranges",
+  "cache-control": "Cache-Control",
+  "etag": "ETag",
+  "last-modified": "Last-Modified",
+};
+
+function sanitizeResponseHeaders(upstreamHeaders, corsHeaders = {}) {
+  const sanitized = {
+    ...corsHeaders,
+    "X-Content-Type-Options": "nosniff",
+  };
+
+  if (!upstreamHeaders || typeof upstreamHeaders !== "object") {
+    return sanitized;
+  }
+
+  for (const [lowerName, canonicalName] of Object.entries(SAFE_RESPONSE_HEADERS)) {
+    if (upstreamHeaders[lowerName] !== undefined) {
+      sanitized[canonicalName] = upstreamHeaders[lowerName];
+    }
+  }
+
+  return sanitized;
+}
+
 // Validate target URL and pre-resolve DNS safely
-async function validateAndResolveUrl(urlStr) {
+async function validateAndResolveUrl(urlStr, options = {}) {
   let parsed;
   try {
     parsed = new URL(urlStr);
@@ -265,6 +395,18 @@ async function validateAndResolveUrl(urlStr) {
     return { error: `Restricted port: ${port}. Only ports 80 and 443 are allowed.`, status: 403 };
   }
 
+  // HTTPS requirement check
+  const allowHttp =
+    options.allowInsecureHttp !== undefined
+      ? options.allowInsecureHttp
+      : ALLOW_INSECURE_HTTP_PROXY;
+  if (parsed.protocol === "http:" && !allowHttp) {
+    return {
+      error: "Insecure HTTP proxying is disabled. Target URL must use HTTPS. Set ALLOW_INSECURE_HTTP_PROXY=true to permit HTTP.",
+      status: 403,
+    };
+  }
+
   const hostname = parsed.hostname;
   if (!hostname) {
     return { error: "Missing hostname", status: 400 };
@@ -278,6 +420,23 @@ async function validateAndResolveUrl(urlStr) {
     lowerHost.endsWith(".localhost")
   ) {
     return { error: "Access to internal domain is forbidden", status: 403 };
+  }
+
+  // Host allowlist check
+  const requireAllowlist =
+    options.requireAllowlist !== undefined
+      ? options.requireAllowlist
+      : (ALLOWED_PROXY_HOSTS.length > 0 ? REQUIRE_PROXY_ALLOWLIST : false);
+  const allowedHosts =
+    options.allowedHosts !== undefined ? options.allowedHosts : ALLOWED_PROXY_HOSTS;
+
+  if (requireAllowlist) {
+    if (!isHostAllowed(hostname, allowedHosts)) {
+      return {
+        error: `Target host "${hostname}" is not in the allowed proxy host list`,
+        status: 403,
+      };
+    }
   }
 
   // If host is already an IP address
@@ -342,20 +501,28 @@ function handleVideoProxy(req, res, reqUrl) {
     return res.end("Method Not Allowed");
   }
 
-  // Rate limiting
+  // Proxy disabled by default in public deployment
+  if (!ENABLE_VIDEO_PROXY) {
+    res.writeHead(503, { "Content-Type": "text/plain", ...corsHeaders });
+    return res.end(
+      "503 Service Unavailable: Video proxy is disabled by default. Set ENABLE_VIDEO_PROXY=true and configure ALLOWED_PROXY_HOSTS to enable."
+    );
+  }
+
+  // Rate limiting per client IP
   const clientIp =
     req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
     req.socket.remoteAddress ||
     "127.0.0.1";
   if (isRateLimited(clientIp)) {
     res.writeHead(429, { "Content-Type": "text/plain", ...corsHeaders });
-    return res.end("Too Many Requests: Rate limit exceeded for video proxy");
+    return res.end("Too Many Requests: Rate limit exceeded for client IP");
   }
 
-  // Concurrency & bandwidth guard: limit simultaneous streams per client IP
+  // Concurrency guard: check global and per-IP capacity
   if (!acquireStreamSlot(clientIp)) {
     res.writeHead(429, { "Content-Type": "text/plain", ...corsHeaders });
-    return res.end("Too Many Concurrent Requests: Max 6 active streams per IP");
+    return res.end("Too Many Concurrent Requests: Stream slot limit reached");
   }
 
   let slotReleased = false;
@@ -376,6 +543,41 @@ function handleVideoProxy(req, res, reqUrl) {
     return res.end("Missing 'url' query parameter");
   }
 
+  // Validate Range header syntax and reject multi-part range abuse
+  const rangeValidation = validateRangeHeader(req.headers["range"]);
+  if (!rangeValidation.valid) {
+    cleanupSlot();
+    res.writeHead(416, { "Content-Type": "text/plain", ...corsHeaders });
+    return res.end(`Range Not Satisfiable: ${rangeValidation.error}`);
+  }
+
+  // Per-target-host rate limiting
+  let targetHostname;
+  try {
+    targetHostname = new URL(targetUrl).hostname;
+  } catch (e) {
+    cleanupSlot();
+    res.writeHead(400, { "Content-Type": "text/plain", ...corsHeaders });
+    return res.end("Invalid target URL syntax");
+  }
+
+  if (isTargetHostRateLimited(targetHostname)) {
+    cleanupSlot();
+    res.writeHead(429, { "Content-Type": "text/plain", ...corsHeaders });
+    return res.end(
+      `Too Many Requests: Rate limit exceeded for target host (${targetHostname})`
+    );
+  }
+
+  // Require explicit host allowlist if configured or required
+  if (REQUIRE_PROXY_ALLOWLIST && ALLOWED_PROXY_HOSTS.length === 0) {
+    cleanupSlot();
+    res.writeHead(403, { "Content-Type": "text/plain", ...corsHeaders });
+    return res.end(
+      "403 Forbidden: Video proxy requires an explicit HTTPS host allowlist. Set ALLOWED_PROXY_HOSTS."
+    );
+  }
+
   async function fetchProxy(currentUrl, redirectCount = 0) {
     if (redirectCount > 3) {
       cleanupSlot();
@@ -383,7 +585,11 @@ function handleVideoProxy(req, res, reqUrl) {
       return res.end("Too many redirects");
     }
 
-    const validation = await validateAndResolveUrl(currentUrl);
+    const validation = await validateAndResolveUrl(currentUrl, {
+      allowedHosts: ALLOWED_PROXY_HOSTS,
+      requireAllowlist: REQUIRE_PROXY_ALLOWLIST,
+      allowInsecureHttp: ALLOW_INSECURE_HTTP_PROXY,
+    });
     if (validation.error) {
       cleanupSlot();
       res.writeHead(validation.status || 400, {
@@ -398,12 +604,12 @@ function handleVideoProxy(req, res, reqUrl) {
 
     const reqHeaders = {
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 MovieNight/1.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 MovieNight/1.1",
       "Accept": "*/*",
       "Host": parsed.host,
     };
-    if (req.headers["range"]) {
-      reqHeaders["range"] = req.headers["range"];
+    if (rangeValidation.sanitized) {
+      reqHeaders["Range"] = rangeValidation.sanitized;
     }
 
     // Connect directly to the validated IP to prevent DNS rebinding
@@ -431,7 +637,7 @@ function handleVideoProxy(req, res, reqUrl) {
         proxyReq.destroy();
         let nextUrl;
         try {
-          nextUrl = new URL(proxyRes.headers.location, parsed).href;
+          nextUrl = new URL(proxyRes.headers.location, currentUrl).href;
         } catch (e) {
           cleanupSlot();
           res.writeHead(400, { "Content-Type": "text/plain", ...corsHeaders });
@@ -479,19 +685,10 @@ function handleVideoProxy(req, res, reqUrl) {
         }
       });
 
-      const resHeaders = {
-        ...corsHeaders,
-        "Content-Type": contentType || "video/mp4",
-        "X-Content-Type-Options": "nosniff",
-      };
-      if (proxyRes.headers["content-length"]) {
-        resHeaders["Content-Length"] = proxyRes.headers["content-length"];
-      }
-      if (proxyRes.headers["content-range"]) {
-        resHeaders["Content-Range"] = proxyRes.headers["content-range"];
-      }
-      if (proxyRes.headers["accept-ranges"]) {
-        resHeaders["Accept-Ranges"] = proxyRes.headers["accept-ranges"];
+      // Safe Response-Header Handling (strip cookies, server fingerprints, etc.)
+      const resHeaders = sanitizeResponseHeaders(proxyRes.headers, corsHeaders);
+      if (!resHeaders["Content-Type"]) {
+        resHeaders["Content-Type"] = contentType || "video/mp4";
       }
 
       res.writeHead(proxyRes.statusCode, resHeaders);
@@ -622,6 +819,13 @@ module.exports = {
   handleVideoProxy,
   acquireStreamSlot,
   releaseStreamSlot,
+  isHostAllowed,
+  validateRangeHeader,
+  isTargetHostRateLimited,
+  sanitizeResponseHeaders,
+  ENABLE_VIDEO_PROXY,
+  ALLOWED_PROXY_HOSTS,
   MAX_CONCURRENT_STREAMS_PER_IP,
+  MAX_TOTAL_CONCURRENT_STREAMS,
   MAX_STREAM_BYTES,
 };

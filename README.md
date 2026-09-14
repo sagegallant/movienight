@@ -216,10 +216,12 @@ MovieNight's hybrid connectivity architecture ensures high availability across d
 | **Room Code Guessing / Brute Force** | Medium | Rooms use random 6-character alphanumeric codes. Even if guessed, the host must manually admit the participant via the admission modal. |
 | **Malicious External Video URLs** | Low/Medium | Video URLs are loaded into standard HTML5 `<video>` elements or sandboxed YouTube `<iframe>` elements. No user-supplied scripts are evaluated. |
 | **Signaling Broker Metadata** | Low | The public PeerJS signaling server observes connection metadata (IP addresses, peer IDs) during handshake. For total network autonomy, self-host [PeerServer](https://github.com/peers/peerjs-server). |
-| **CORS Proxy & SSRF Abuse** | Low | The Node.js `/proxy-video` endpoint enforces pre-flight DNS validation with strict IPv4/IPv6 blocklists (loopback, RFC 1918 private subnets, carrier-grade NAT, cloud metadata `169.254.169.254`), pins sockets to validated IPs to prevent DNS rebinding, restricts ports (80, 443), enforces media Content-Type checking, re-validates redirects (max 3), limits rates per IP, and binds CORS to the origin. |
+| **CORS Proxy & SSRF Abuse** | Low | The Node.js `/proxy-video` endpoint is **disabled by default** (`ENABLE_VIDEO_PROXY=false`, returning 503). When explicitly enabled, it enforces an explicit HTTPS host allowlist (`ALLOWED_PROXY_HOSTS`), pre-flight DNS resolution rejecting loopback, private, link-local, and cloud-metadata addresses (`169.254.169.254`), socket pinning against DNS rebinding, redirect re-validation on every hop, standard HTTPS port restrictions (443), response size limits (2 GB), read timeouts (15s), per-IP (60/min) and per-target-host (30/min) rate limiting, Range abuse protection against multipart attacks (CVE-2011-3192), active concurrency limits (6/IP, 30 global), and safe response-header filtering (stripping `Set-Cookie`, `Server`, and `X-Powered-By`). |
 
 > [!WARNING]
-> **Proxy Scope Notice**: The included Node.js `/proxy-video` proxy forwards HTTP Range requests with CORS headers to enable video capture. It is an SSRF-protected streaming forwarder, **not** an antivirus, deep-packet-inspection, or content-sanitization firewall. Do not paste untrusted URLs from unknown sources.
+> **Proxy Scope & Content Clarification**:
+> - **Disabled by Default**: The Node.js `/proxy-video` endpoint is disabled by default in public deployment (`ENABLE_VIDEO_PROXY=false`). It returns `503 Service Unavailable` unless an operator explicitly enables it and configures `ALLOWED_PROXY_HOSTS`.
+> - **No Content Sanitization**: The proxy is strictly a transport-level HTTP Range streaming forwarder to enable browser `<video>` CORS capture. It does **not** inspect binary payloads for malware, perform deep packet inspection, or sanitize media content. Operators should only allowlist trusted, reputable HTTPS media CDNs. Do not proxy untrusted URLs from unknown sources.
 
 ---
 
@@ -249,7 +251,7 @@ npm install
 ```bash
 npm test
 ```
-Runs the 26 automated unit tests validating SSRF security, room limits, TURN config, SDP munging, getStats diagnostics, and SyncEngine accuracy.
+Runs the 36 automated unit tests validating SSRF security, HTTPS host allowlists, range abuse, rate limiting, header sanitization, room limits, TURN config, SDP munging, getStats diagnostics, and SyncEngine accuracy.
 
 ### 3. Start the Application
 ```bash
@@ -279,15 +281,30 @@ MovieNight can run purely client-side on GitHub Pages. The repository includes a
 *Note: GitHub Pages deployment operates without the Node.js CORS proxy. Local video files, synchronized YouTube embeds, and CORS-enabled CDN links work seamlessly.*
 
 ### Option B: Self-Hosted Node.js VPS (With CORS Proxy)
-To enable streaming of external video URLs whose origin servers block CORS:
+The built-in Node.js `/proxy-video` endpoint is **disabled by default** to prevent unauthorized relaying. To enable external video URL streaming, provide environment variables:
 
 ```bash
-# Production setup with PM2
+# Enable proxy and configure HTTPS host allowlist
+export ENABLE_VIDEO_PROXY="true"
+export ALLOWED_PROXY_HOSTS="commondatastorage.googleapis.com,cdn.example.com,*.myhost.net"
+
+# Production process management with PM2
 npm install -g pm2
 pm2 start server.js --name "movienight"
 pm2 startup
 pm2 save
 ```
+
+#### Proxy Environment Configuration
+
+| Variable | Default | Description |
+| :--- | :---: | :--- |
+| `ENABLE_VIDEO_PROXY` | `false` | Master switch for `/proxy-video`. Returns `503 Service Unavailable` when `false`. |
+| `ALLOWED_PROXY_HOSTS` | *(empty)* | Comma-separated allowlist of allowed hostnames/wildcards (e.g. `cdn.example.com,*.myhost.net`). |
+| `REQUIRE_PROXY_ALLOWLIST` | `true` | When `true`, all proxied URLs must match `ALLOWED_PROXY_HOSTS`. |
+| `ALLOW_INSECURE_HTTP_PROXY` | `false` | When `false`, target URLs must use `https://`. Plain `http://` targets are rejected with `403`. |
+| `PORT` | `3000` | Port for the HTTP server to listen on. |
+| `ALLOWED_ORIGIN` | `null` | Origin for CORS headers (restricts to same host by default). |
 
 ---
 
