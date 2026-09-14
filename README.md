@@ -17,9 +17,7 @@
 
 <p align="center">
   <img src="assets/preview.jpg" alt="MovieNight — P2P Watch Party & Virtual Screening Room" width="100%" />
-</p>
-
-[**Architecture**](#-architecture--how-it-works) • [**Capabilities**](#-capabilities--specifications) • [**Operating Envelope Evidence**](#-operating-envelope-empirical-validation) • [**Sync Engine**](#-synchronization-architecture) • [**Connectivity & NAT**](#-connectivity-model--nat-traversal) • [**Browser Matrix**](#-browser-compatibility-matrix) • [**Security & Threat Model**](#-security-privacy--threat-model) • [**Limitations**](#-known-limitations) • [**Security Policy**](SECURITY.md) • [**Quickstart**](#-quickstart--local-development)
+[**Architecture**](#-architecture--how-it-works) • [**Capabilities**](#-capabilities--specifications) • [**Operating Envelope Evidence**](#-operating-envelope-empirical-validation) • [**Sync Engine**](#-synchronization-architecture) • [**Connectivity & NAT**](#-connectivity-model--nat-traversal) • [**Browser Matrix**](#-browser-compatibility-matrix) • [**Security & Threat Model**](#-security-privacy--threat-model) • [**Limitations**](#-known-limitations) • [**Security Policy**](SECURITY.md) • [**Contributing**](CONTRIBUTING.md) • [**Quickstart**](#-quickstart--local-development)
 
 </div>
 
@@ -370,7 +368,7 @@ MovieNight adheres to [Semantic Versioning](https://semver.org/). See the comple
 
 ## 🤝 Contributing
 
-Contributions are welcome! Whether filing bug reports, improving documentation, or optimizing the WebRTC sync engine:
+Contributions are welcome! Please read our [Contribution Guidelines (CONTRIBUTING.md)](CONTRIBUTING.md) before opening a pull request. Whether filing bug reports, improving documentation, or optimizing the WebRTC sync engine:
 
 1. Fork the Project.
 2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`).
