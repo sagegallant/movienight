@@ -10,9 +10,9 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen.svg?style=for-the-badge)](https://github.com/sagegallant/movienight/pulls)
 
 <p align="center">
-  <strong>Private, peer-to-peer virtual screening room and watch party platform in your browser.</strong><br>
-  Stream local video files, direct URLs, screen shares, and synchronized YouTube embeds in near-synchronous lock-step.<br>
-  <em>No application database. No central media relay server. Media streams directly between peers over encrypted WebRTC.</em>
+  <strong>MovieNight is a private, small-group P2P watch-party application.</strong><br>
+  Media is streamed directly between browsers using WebRTC, with PeerJS used for signaling and room coordination.<br>
+  <em>Designed and tested for groups of up to 6 participants. No MovieNight media server stores or processes the streamed media.</em>
 </p>
 
 <p align="center">
@@ -26,22 +26,28 @@
 ---
 
 > [!NOTE]
-> **Project Status**: MovieNight is an open-source, production-oriented prototype and experimental P2P screening application. It is designed and optimized for small private groups (tested 2–6 participants). An optional lightweight Node.js server component is provided strictly for CORS-restricted media proxying; no media or chat messages are stored on any server.
+> **Defensible Technical Claims**:
+> - **P2P Streaming Architecture**: MovieNight is a private, small-group P2P watch-party application. Media is streamed directly between browsers using WebRTC, with PeerJS used for signaling and room coordination.
+> - **Operating Envelope**: Designed and tested for groups of up to 6 participants.
+> - **Deterministic Synchronization**: Playback synchronization uses host timeline timestamps, latency compensation, and drift correction.
+> - **Hybrid Connectivity**: Direct WebRTC connectivity is preferred; TURN provides relay fallback when direct connectivity isn't possible.
+> - **Zero Media Server Storage**: No MovieNight media server stores or processes the streamed media.
 
 ---
 
 ## 🌟 Architectural Highlights
 
-- 🛡️ **No Media Server Architecture**: Video and audio frames are decoded in the browser and transmitted directly to peers using WebRTC DTLS/SRTP encryption. No video files or stream chunks are stored on or relayed through application servers.
-- ⚡ **Signaling via PeerJS**: Ephemeral room discovery, ICE candidate exchange, and SDP handshakes are coordinated via PeerJS cloud brokers (or self-hosted PeerServer). Once connected, the signaling server is bypassed for all media and room state.
-- 👥 **Optimized for Small Groups (2–6 Peers)**: Designed for private co-watching among friends without the infrastructure cost or complexity of an SFU (Selective Forwarding Unit) or MCU.
+- 🛡️ **Zero Media Server Storage**: Video and audio frames are decoded in the browser and transmitted directly between peers using WebRTC DTLS/SRTP encryption. No MovieNight media server stores or processes the streamed media.
+- ⚡ **Signaling via PeerJS**: Ephemeral room discovery, ICE candidate exchange, and SDP handshakes are coordinated via PeerJS cloud brokers (or self-hosted PeerServer). Once connected, the signaling broker is bypassed for all media and room state.
+- 👥 **Operating Envelope (2–6 Participants)**: Designed and tested for groups of up to 6 participants, enforcing adaptive bitrate tiers (`SOLO`, `SMALL`, `MEDIUM`, `CONSTRAINED`) to safeguard host uplink bandwidth.
+- 🔄 **Direct P2P with TURN Fallback**: Direct WebRTC connectivity is preferred; TURN provides relay fallback when direct connectivity isn't possible behind restrictive NATs or firewalls.
+- ⏱️ **Deterministic Synchronization**: Playback synchronization uses host timeline timestamps, NTP-style latency compensation, and 3-tier drift correction.
 - 🎥 **Triple-Mode Playback Pipeline**:
   - **Local Files**: Browser hardware decodes `.mp4`, `.webm`, `.mov`, or `.mkv` files and broadcasts media tracks via `HTMLMediaElement.captureStream()`.
-  - **Direct URLs**: HTML5 `<video>` playback with built-in HTTP Range proxy support to handle third-party servers that restrict CORS headers.
+  - **Direct URLs**: HTML5 `<video>` playback with SSRF-protected HTTP Range proxy support to handle third-party servers lacking CORS headers.
   - **YouTube Embeds**: Official YouTube IFrame Player API integration with bidirectional play, pause, and seek synchronization over WebRTC DataChannels.
-- 💎 **1080p WebRTC Negotiation Hints**: Injects RFC 4566 SDP bandwidth targets (`b=AS:12000`, `b=TIAS:12000000`, `x-google-start-bitrate=6000`) and encoder directives (`degradationPreference = "maintain-resolution"`, `contentHint = "detail"`) to optimize the browser pipeline for sharp text and 1080p video rather than default low-bitrate webcam tuning.
-- ⏱️ **Continuous Drift Correction**: Presenter clock heartbeats and latency compensation maintain near-synchronous playback with an automatic drift-correction threshold ($< 0.8$s).
-- 🍿 **Interactive Cinema Stage**: Responsive 16:9 cinema theater, webcam grid, live emoji reactions, Backrow chat, and procedural SVG avatars.
+- 💎 **Adaptive WebRTC Bandwidth & Codec Control**: Dynamic bitrate scaling per room size with standard `RTCRtpSender.setParameters()` and RFC 7587 Stereo Opus audio negotiation (`stereo=1; maxaveragebitrate=256000`).
+- 📊 **Real-Time Observability**: Live `StatsMonitor` analyzing `RTCPeerConnection.getStats()` (RTT, packet loss, jitter, bitrates, P2P vs Relay) with interactive Diagnostics HUD.
 
 ---
 
@@ -49,17 +55,17 @@
 
 | Dimension | MovieNight Specification | Technical Implementation |
 | :--- | :--- | :--- |
-| **Network Topology** | Full Mesh (P2P) | Direct peer-to-peer WebRTC connections between all participants |
-| **Signaling Dependency** | PeerJS Broker / Cloud | Initial SDP Offer/Answer handshake and ICE candidate exchange |
-| **Recommended Group Size** | **2–6 participants** | Mesh upload bandwidth scales linearly ($N-1$ outbound streams per presenter) |
-| **Media Server Storage** | **None (0 MB stored)** | Audio/video decoded locally; exists solely in peer browser memory |
+| **Product Model** | Private P2P Watch Party | Media streams directly between peer browsers using WebRTC |
+| **Signaling & Coordination** | PeerJS Broker / Cloud | Initial SDP Offer/Answer handshake and ICE candidate exchange |
+| **Operating Envelope** | **Up to 6 participants** | Designed and tested for groups of up to 6 participants ($O(N^2)$ mesh constraint) |
+| **Media Server Storage** | **None (0 MB stored/processed)** | No MovieNight media server stores or processes the streamed media |
+| **Connectivity Strategy** | Direct P2P + TURN Relay | Direct WebRTC connectivity is preferred; TURN provides relay fallback |
+| **Playback Synchronization** | Timeline & Drift Correction | Uses host timeline timestamps, latency compensation, and 3-tier drift correction |
 | **Application Database** | **None** | Ephemeral room state; rooms dissolve when the last participant departs |
-| **Target Video Quality** | Up to 1080p @ 30–60 fps | SDP bandwidth hints (`b=AS:12000`); bounded by client CPU and upload bandwidth |
+| **Video Bitrate Adaptation**| 4 Tiers (2.0 to 8.0 Mbps) | Adaptive bitrate tiers (`SOLO`, `SMALL`, `MEDIUM`, `CONSTRAINED`) based on mesh size |
 | **Target Audio Quality** | Up to 256 kbps Stereo | RFC 7587 Stereo Opus negotiation (`stereo=1; maxaveragebitrate=256000`) |
-| **Sync Accuracy Target** | Near-sync (drift $< 0.8$s) | 1000ms periodic heartbeat + network transit offset compensation |
-| **Transport Separation** | SRTP (Media) + SCTP (Control) | Dedicated media tracks for video/audio; DataChannels for chat and sync |
 | **Access Control** | Knock & Approval Admission | 6-character room codes (`ABC-123`) with host-approved entry modal |
-| **CORS Media Proxy** | Optional Node.js Service | HTTP Range forwarder (`/proxy-video`) for external media URLs lacking CORS |
+| **CORS Media Proxy** | SSRF-Hardened Node.js Service | Pre-flight DNS validation, IP blocklists, DNS pinning, and origin-bound CORS |
 
 ---
 
@@ -137,51 +143,49 @@ WebRTC was originally designed for low-bandwidth video calling, defaulting to co
 
 ## ⏱️ Synchronization Architecture
 
-MovieNight achieves near-synchronized playback across different network connections without a central media server using an authoritative client clock with transit compensation.
+MovieNight's playback synchronization uses **host timeline timestamps, latency compensation, and drift correction** without a central media server:
 
 ```
-PRESENTER                                                   PARTICIPANT
-    │                                                            │
-    │ ─── 1. Emits Heartbeat (T = 1.0s) ───────────────────────► │
-    │     { currentTime: 142.5, paused: false, timestamp: t0 }   │
-    │                                                            │
-    │                                                            │ ─── 2. Computes Transit Latency:
-    │                                                            │        Δt = (Date.now() - t0) / 1000
-    │                                                            │
-    │                                                            │ ─── 3. Computes Target Position:
-    │                                                            │        targetTime = currentTime + Δt
-    │                                                            │
-    │                                                            │ ─── 4. Evaluates Drift:
-    │                                                            │        drift = |localTime - targetTime|
-    │                                                            │        • If drift > 0.8s: seekTo(targetTime)
-    │                                                            │        • If drift ≤ 0.8s: ignore (prevent stutter)
-    │                                                            │
-    │ ◄── 5. Host Override (Pause / Seek / Play) ─────────────── │
+HOST (PRESENTER)                                             VIEWER (PARTICIPANT)
+     │                                                               │
+     │ ─── 1. NTP Clock Ping { t0 } ───────────────────────────────► │
+     │ ◄── 2. NTP Clock Pong { t0, t1, t2 } ──────────────────────── │
+     │     Computes Offset: θ = ((t1 - t0) + (t2 - t3)) / 2          │
+     │                                                               │
+     │ ─── 3. Heartbeat Payload (1000ms interval) ─────────────────► │
+     │     { time, duration, isPlaying, timestamp }                  │
+     │                                                               │
+     │                                                               │ ─── 4. Calculates Expected Position:
+     │                                                               │        targetTime = hostPos + (elapsed * rate)
+     │                                                               │
+     │                                                               │ ─── 5. 3-Tier Drift Evaluation:
+     │                                                               │        drift = localCurrentTime - targetTime
+     │                                                               │        • |drift| ≤ 150ms: In-sync (no action, rate 1.0x)
+     │                                                               │        • 150ms < |drift| ≤ 1500ms: Micro-rate (0.95x / 1.05x)
+     │                                                               │        • |drift| > 1500ms: Hard seek to targetTime
+     │                                                               │
+     │ ◄── 6. Host Control Override (Play / Pause / Seek) ────────── │
 ```
 
-### Protocol Steps:
-1. **Heartbeat Beacon**: The active presenter broadcasts a sync payload every 1000ms over the DataChannel:
-   $$\{ \text{currentTime}, \text{duration}, \text{paused}, \text{timestamp: Date.now()} \}$$
-2. **Transit Latency Estimation**: The participant calculates one-way transit delay:
-   $$\Delta t = \frac{\text{Date.now()} - \text{timestamp}}{1000}$$
-3. **Expected Position Calculation**:
-   $$\text{targetTime} = \text{currentTime} + (\text{paused} ? 0 : \Delta t)$$
-4. **Drift Evaluation**:
-   $$\text{drift} = |\text{localPlaybackTime} - \text{targetTime}|$$
-   - **Threshold breached ($\text{drift} > 0.8\text{s}$)**: The participant smoothly seeks to `targetTime`.
-   - **Within tolerance ($\text{drift} \le 0.8\text{s}$)**: Normal playback continues uninterrupted, avoiding micro-stutters.
-5. **Late-Joiner Recovery**: When a new viewer joins mid-screening, they receive the room's current state and apply $\Delta t$ to jump immediately to the current playback position.
-6. **Host Override Authority**: If the room host is not the presenter, host playback actions (play, pause, seek) broadcast high-priority control packets that override local client states.
+### Protocol Components:
+1. **NTP-Style Latency & Offset Estimation**: Two-way `clock_ping` / `clock_pong` packets calculate transit time and clock skew. An 8-sample median filter eliminates transient network latency spikes.
+2. **Host Timeline Modeling**: Viewers calculate expected host video position at local time:
+   $$\text{targetPosition} = \text{hostPosition} + (\text{localTime} - (\text{hostTimestamp} + \theta)) \times \text{playbackRate}$$
+3. **3-Tier Drift Correction**:
+   - **In-Sync ($|\text{drift}| \le 150\text{ms}$)**: Maintained at `1.0x` playback rate with zero visual or audio stutter.
+   - **Micro-Adjustment ($150\text{ms} < |\text{drift}| \le 1500\text{ms}$)**: Smoothly catches up using dynamic playback rate scaling (`0.95x` if ahead, `1.05x` if behind) without audio pitch warping.
+   - **Hard Seek ($|\text{drift}| > 1500\text{ms}$)**: Immediately seeks to the expected host position.
+4. **Deterministic Late-Joiner Recovery**: Joining viewers compute the host's elapsed playback offset upon arrival and seek immediately to the active screening position.
 
 ---
 
 ## 🌐 Connectivity Model & NAT Traversal
 
-MovieNight relies on WebRTC's Interactive Connectivity Establishment (ICE) protocol:
+MovieNight's hybrid connectivity architecture ensures high availability across diverse network environments:
 
-- **STUN Discovery**: Uses public Google STUN servers (`stun:stun.l.google.com:19302`) to discover external public IP addresses and UDP port mappings.
-- **NAT Traversal Capability**: Successfully establishes direct peer-to-peer connections across Full-Cone NAT, Address-Restricted NAT, and Port-Restricted NAT configurations (standard for most home broadband and consumer Wi-Fi networks).
-- **Symmetric NAT & Enterprise Firewalls**: When two connecting peers are both behind symmetric NATs (common in corporate, university, or strict cellular networks), direct UDP socket pairs cannot be negotiated using STUN alone. In such environments, a **TURN relay server** (RFC 5766) is required. Users deploying in enterprise environments can configure custom TURN credentials in the PeerJS connection options.
+- **Direct P2P Preferred**: WebRTC Direct P2P is preferred and used by default (`iceTransportPolicy: "all"`). Media streams and DataChannels flow directly between participant browsers.
+- **STUN Discovery**: Uses public STUN servers (`stun:stun.l.google.com:19302`, `stun:global.stun.twilio.com:3478`) for NAT port mapping discovery.
+- **TURN Relay Fallback**: Direct WebRTC connectivity is preferred; TURN provides relay fallback when direct connectivity isn't possible (e.g. behind symmetric NATs or restrictive corporate/campus firewalls). Users can input custom TURN relay credentials via the UI modal or configure them in `localStorage`.
 
 ---
 

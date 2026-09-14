@@ -33,21 +33,25 @@
         <p class="eyebrow">PRIVATE SCREENING ROOMS · PEER-TO-PEER · IN-BROWSER</p>
         <h1>The lights go down <em>together</em>.</h1>
         <p class="lede">
-          MovieNight is a private screening room that lives in your browser. Play a video file, paste a direct media link,
-          or share your screen live — media travels straight from your machine to your friends.
+          MovieNight is a private, small-group P2P watch-party application. Media is streamed directly between browsers
+          using WebRTC, with PeerJS used for signaling and room coordination.
         </p>
         <ul class="ticks">
           <li>
             <span class="lamp on"></span>
-            <div><b>Peer-to-Peer Streaming.</b> Media moves directly between participants using WebRTC data and media channels.</div>
+            <div><b>Small-Group Operating Envelope.</b> Designed and tested for groups of up to 6 participants.</div>
           </li>
           <li>
             <span class="lamp on"></span>
-            <div><b>Host Approval Required.</b> Guests wait at the door until the host approves their request to enter.</div>
+            <div><b>Deterministic Playback Sync.</b> Playback synchronization uses host timeline timestamps, latency compensation, and drift correction.</div>
           </li>
           <li>
             <span class="lamp on"></span>
-            <div><b>Zero Setup.</b> No account or sign-up needed. Enter a name and start screening immediately.</div>
+            <div><b>Direct P2P & TURN Fallback.</b> Direct WebRTC connectivity is preferred; TURN provides relay fallback when direct connectivity isn't possible.</div>
+          </li>
+          <li>
+            <span class="lamp on"></span>
+            <div><b>Zero Server Processing.</b> No MovieNight media server stores or processes the streamed media.</div>
           </li>
         </ul>
       </div>
