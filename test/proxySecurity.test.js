@@ -171,3 +171,47 @@ test("Proxy Content-Type - Only Permits Media Types", () => {
   assert.equal(isAllowedContentType("image/svg+xml"), false);
   assert.equal(isAllowedContentType("application/javascript"), false);
 });
+
+test("Proxy Security - Rejects Credential-Bearing URLs", async () => {
+  const credRes1 = await validateAndResolveUrl("http://admin:password@example.com/video.mp4");
+  assert.equal(credRes1.status, 400);
+  assert.match(credRes1.error, /Credential-bearing URLs/);
+
+  const credRes2 = await validateAndResolveUrl("https://user@example.com/video.mp4");
+  assert.equal(credRes2.status, 400);
+  assert.match(credRes2.error, /Credential-bearing URLs/);
+});
+
+test("Proxy Security - Concurrency & Stream Slot Limiting", () => {
+  const {
+    acquireStreamSlot,
+    releaseStreamSlot,
+    MAX_CONCURRENT_STREAMS_PER_IP,
+    MAX_STREAM_BYTES,
+  } = require("../server.js");
+
+  const testIp = "203.0.113.99";
+
+  // Acquire up to MAX_CONCURRENT_STREAMS_PER_IP (6)
+  for (let i = 0; i < MAX_CONCURRENT_STREAMS_PER_IP; i++) {
+    assert.equal(acquireStreamSlot(testIp), true);
+  }
+
+  // 7th attempt must fail with false
+  assert.equal(acquireStreamSlot(testIp), false);
+
+  // Release one slot
+  releaseStreamSlot(testIp);
+
+  // Now an acquisition succeeds
+  assert.equal(acquireStreamSlot(testIp), true);
+
+  // Clean up all slots for testIp
+  for (let i = 0; i < MAX_CONCURRENT_STREAMS_PER_IP; i++) {
+    releaseStreamSlot(testIp);
+  }
+
+  // Verify MAX_STREAM_BYTES is configured to 2 GB
+  assert.equal(MAX_STREAM_BYTES, 2 * 1024 * 1024 * 1024);
+});
+

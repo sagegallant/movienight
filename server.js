@@ -66,6 +66,29 @@ setInterval(() => {
   }
 }, RATE_LIMIT_WINDOW_MS).unref();
 
+// Concurrency & Bandwidth Exhaustion Guard (max 6 active concurrent streams per client IP)
+const MAX_CONCURRENT_STREAMS_PER_IP = 6;
+const MAX_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB per stream limit
+const activeStreamsPerIp = new Map();
+
+function acquireStreamSlot(clientIp) {
+  const current = activeStreamsPerIp.get(clientIp) || 0;
+  if (current >= MAX_CONCURRENT_STREAMS_PER_IP) {
+    return false;
+  }
+  activeStreamsPerIp.set(clientIp, current + 1);
+  return true;
+}
+
+function releaseStreamSlot(clientIp) {
+  const current = activeStreamsPerIp.get(clientIp) || 0;
+  if (current <= 1) {
+    activeStreamsPerIp.delete(clientIp);
+  } else {
+    activeStreamsPerIp.set(clientIp, current - 1);
+  }
+}
+
 // ============================================================
 // SSRF & IP Validation Helpers
 // ============================================================
@@ -220,6 +243,14 @@ async function validateAndResolveUrl(urlStr) {
     return { error: "Invalid URL syntax", status: 400 };
   }
 
+  // Reject credential-bearing URLs (e.g. user:password@host)
+  if (parsed.username || parsed.password) {
+    return {
+      error: "Credential-bearing URLs (user:password@host) are prohibited",
+      status: 400,
+    };
+  }
+
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return { error: "Only HTTP and HTTPS protocols are supported", status: 400 };
   }
@@ -321,20 +352,40 @@ function handleVideoProxy(req, res, reqUrl) {
     return res.end("Too Many Requests: Rate limit exceeded for video proxy");
   }
 
+  // Concurrency & bandwidth guard: limit simultaneous streams per client IP
+  if (!acquireStreamSlot(clientIp)) {
+    res.writeHead(429, { "Content-Type": "text/plain", ...corsHeaders });
+    return res.end("Too Many Concurrent Requests: Max 6 active streams per IP");
+  }
+
+  let slotReleased = false;
+  function cleanupSlot() {
+    if (!slotReleased) {
+      slotReleased = true;
+      releaseStreamSlot(clientIp);
+    }
+  }
+
+  res.on("close", cleanupSlot);
+  res.on("finish", cleanupSlot);
+
   const targetUrl = reqUrl.searchParams.get("url");
   if (!targetUrl) {
+    cleanupSlot();
     res.writeHead(400, { "Content-Type": "text/plain", ...corsHeaders });
     return res.end("Missing 'url' query parameter");
   }
 
   async function fetchProxy(currentUrl, redirectCount = 0) {
     if (redirectCount > 3) {
+      cleanupSlot();
       res.writeHead(508, { "Content-Type": "text/plain", ...corsHeaders });
       return res.end("Too many redirects");
     }
 
     const validation = await validateAndResolveUrl(currentUrl);
     if (validation.error) {
+      cleanupSlot();
       res.writeHead(validation.status || 400, {
         "Content-Type": "text/plain",
         ...corsHeaders,
@@ -382,6 +433,7 @@ function handleVideoProxy(req, res, reqUrl) {
         try {
           nextUrl = new URL(proxyRes.headers.location, parsed).href;
         } catch (e) {
+          cleanupSlot();
           res.writeHead(400, { "Content-Type": "text/plain", ...corsHeaders });
           return res.end("Invalid redirect location");
         }
@@ -392,11 +444,40 @@ function handleVideoProxy(req, res, reqUrl) {
       const contentType = proxyRes.headers["content-type"] || "";
       if (proxyRes.statusCode === 200 && !isAllowedContentType(contentType)) {
         proxyReq.destroy();
+        cleanupSlot();
         res.writeHead(415, { "Content-Type": "text/plain", ...corsHeaders });
         return res.end(
           `Unsupported Media Type: Proxy only allows audio/video content (got: ${contentType})`,
         );
       }
+
+      // Check for oversized responses
+      if (proxyRes.headers["content-length"]) {
+        const cl = parseInt(proxyRes.headers["content-length"], 10);
+        if (!isNaN(cl) && cl > MAX_STREAM_BYTES) {
+          proxyReq.destroy();
+          cleanupSlot();
+          res.writeHead(413, { "Content-Type": "text/plain", ...corsHeaders });
+          return res.end("Payload Too Large: Stream exceeds 2GB limit");
+        }
+      }
+
+      // Idle read timeout protection against slow responses
+      proxyRes.setTimeout(15000, () => {
+        proxyReq.destroy();
+        cleanupSlot();
+      });
+
+      // Stream byte counter protection against unbounded chunked responses
+      let streamedBytes = 0;
+      proxyRes.on("data", (chunk) => {
+        streamedBytes += chunk.length;
+        if (streamedBytes > MAX_STREAM_BYTES) {
+          proxyReq.destroy();
+          cleanupSlot();
+          res.destroy();
+        }
+      });
 
       const resHeaders = {
         ...corsHeaders,
@@ -419,6 +500,7 @@ function handleVideoProxy(req, res, reqUrl) {
 
     proxyReq.on("timeout", () => {
       proxyReq.destroy();
+      cleanupSlot();
       if (!res.headersSent) {
         res.writeHead(504, { "Content-Type": "text/plain", ...corsHeaders });
         res.end("Video proxy gateway timeout");
@@ -426,6 +508,7 @@ function handleVideoProxy(req, res, reqUrl) {
     });
 
     proxyReq.on("error", (err) => {
+      cleanupSlot();
       console.error("Proxy video error:", err.message);
       if (!res.headersSent) {
         res.writeHead(502, { "Content-Type": "text/plain", ...corsHeaders });
@@ -434,6 +517,7 @@ function handleVideoProxy(req, res, reqUrl) {
     });
 
     req.on("close", () => {
+      cleanupSlot();
       proxyReq.destroy();
     });
 
@@ -536,4 +620,8 @@ module.exports = {
   getCorsHeaders,
   isAllowedContentType,
   handleVideoProxy,
+  acquireStreamSlot,
+  releaseStreamSlot,
+  MAX_CONCURRENT_STREAMS_PER_IP,
+  MAX_STREAM_BYTES,
 };
