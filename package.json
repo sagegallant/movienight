@@ -1,6 +1,6 @@
 {
   "name": "movienight",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MovieNight — P2P Watch Party & Virtual Screening Room in your browser with WebRTC",
   "main": "index.html",
   "scripts": {

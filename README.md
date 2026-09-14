@@ -212,16 +212,16 @@ MovieNight relies on WebRTC's Interactive Connectivity Establishment (ICE) proto
 | **Room Code Guessing / Brute Force** | Medium | Rooms use random 6-character alphanumeric codes. Even if guessed, the host must manually admit the participant via the admission modal. |
 | **Malicious External Video URLs** | Low/Medium | Video URLs are loaded into standard HTML5 `<video>` elements or sandboxed YouTube `<iframe>` elements. No user-supplied scripts are evaluated. |
 | **Signaling Broker Metadata** | Low | The public PeerJS signaling server observes connection metadata (IP addresses, peer IDs) during handshake. For total network autonomy, self-host [PeerServer](https://github.com/peers/peerjs-server). |
-| **CORS Proxy Abuse** | Low/Medium | The Node.js `/proxy-video` endpoint validates URL protocols (`http:`, `https:`), enforces a maximum of 5 redirects, and only proxies binary media streams. It is not an open general-purpose proxy. |
+| **CORS Proxy & SSRF Abuse** | Low | The Node.js `/proxy-video` endpoint enforces pre-flight DNS validation with strict IPv4/IPv6 blocklists (loopback, RFC 1918 private subnets, carrier-grade NAT, cloud metadata `169.254.169.254`), pins sockets to validated IPs to prevent DNS rebinding, restricts ports (80, 443), enforces media Content-Type checking, re-validates redirects (max 3), limits rates per IP, and binds CORS to the origin. |
 
 > [!WARNING]
-> **Proxy Scope Notice**: The included Node.js `/proxy-video` proxy forwards HTTP Range requests with CORS headers to enable video capture. It is a streaming forwarder, **not** an antivirus, deep-packet-inspection, or content-sanitization firewall. Do not paste untrusted URLs from unknown sources.
+> **Proxy Scope Notice**: The included Node.js `/proxy-video` proxy forwards HTTP Range requests with CORS headers to enable video capture. It is an SSRF-protected streaming forwarder, **not** an antivirus, deep-packet-inspection, or content-sanitization firewall. Do not paste untrusted URLs from unknown sources.
 
 ---
 
 ## ⚠️ Known Limitations
 
-1. **P2P Mesh Bandwidth Scaling**: Because MovieNight uses a peer-to-peer mesh rather than an SFU relay, the presenter's computer must upload separate video streams to every viewer ($N-1$ outbound streams). A 1080p stream at 6 Mbps with 4 viewers requires $\approx 24$ Mbps upload bandwidth. For this reason, MovieNight is designed for small groups (2–6 users).
+1. **P2P Mesh Bandwidth Scaling**: Because MovieNight uses a peer-to-peer mesh rather than an SFU relay, the presenter's computer must upload separate video streams to every viewer ($N-1$ outbound streams). MovieNight enforces an explicit operating envelope of 2–6 participants with 4 adaptive bitrate tiers (`SOLO`, `SMALL`, `MEDIUM`, `CONSTRAINED`).
 2. **Codec Compatibility**: Local file playback relies on native browser decoder support. Standard `.mp4` (H.264 / AAC) and `.webm` (VP8/VP9 / Opus) work seamlessly across all platforms. Proprietary formats such as HEVC/H.265 or Dolby DTS audio may not decode in browsers lacking hardware licenses.
 3. **Autoplay Policies**: Modern browsers prohibit media from playing with sound automatically without prior user interaction. Remote YouTube embeds and direct streams start muted by default; viewers must click once to enable audio.
 4. **Mobile Background Throttling**: Mobile operating systems (iOS and Android) pause WebRTC video processing and camera tracks when the browser tab is sent to the background.
@@ -231,7 +231,7 @@ MovieNight relies on WebRTC's Interactive Connectivity Establishment (ICE) proto
 ## 💻 Quickstart & Local Development
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) 18+ (or any static HTTP server)
+- [Node.js](https://nodejs.org/) 18+ (tested on Node 20 & 24 LTS)
 - Modern web browser with WebRTC support
 
 ### 1. Clone & Install
@@ -241,13 +241,19 @@ cd movienight
 npm install
 ```
 
-### 2. Start the Application
+### 2. Run Automated Tests
+```bash
+npm test
+```
+Runs the 26 automated unit tests validating SSRF security, room limits, TURN config, SDP munging, getStats diagnostics, and SyncEngine accuracy.
+
+### 3. Start the Application
 ```bash
 npm start
 ```
 The server will start at `http://localhost:3000`.
 
-### 3. Usage
+### 4. Usage
 1. Open `http://localhost:3000` in your browser.
 2. Enter your display name, choose an avatar, and click **START A NEW SCREENING**.
 3. Share the room code (`ABC-123`) or direct link (`http://localhost:3000/?room=ABC123`) with a friend.
